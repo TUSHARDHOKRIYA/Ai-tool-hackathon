@@ -102,12 +102,12 @@ def draw_final_image(
 
         cls_result = classifications.get(det_id)
         if cls_result:
-            label_short = cls_result.get("label_short", "unknown")
-            conf        = cls_result.get("confidence", 0.0)
-            if label_short == "healthy":
+            label = cls_result.get("predicted_class", "")
+            conf  = cls_result.get("confidence", 0.0)
+            if label == "healthy_corals":
                 color      = COLOR_HEALTHY
                 disp_label = f"Healthy {conf*100:.1f}%"
-            elif label_short == "bleached":
+            elif label == "bleached_corals":
                 color      = COLOR_BLEACHED
                 disp_label = f"Bleached {conf*100:.1f}%"
             else:
@@ -211,10 +211,11 @@ async def run_pipeline(image_bytes: bytes, conf: float, iou: float) -> dict:
         for det in detections:
             did = det["id"]
             cls = cls_map.get(did, {})
-            label_short = cls.get("label_short", "unknown")
+            label = cls.get("predicted_class", "unknown")
+            label_short = "healthy" if label == "healthy_corals" else "bleached" if label == "bleached_corals" else "unknown"
 
             # ── v3: convert classification confidence → health score ──
-            bleach_conf  = cls.get("probs", {}).get("bleached_corals", 0.0)
+            bleach_conf  = cls.get("probabilities", {}).get("bleached_corals", 0.0)
             is_bleached  = label_short == "bleached"
             h_score, h_stage = get_severity(bleach_conf, is_bleached)
 
@@ -222,10 +223,10 @@ async def run_pipeline(image_bytes: bytes, conf: float, iou: float) -> dict:
                 "id"                 : did,
                 "bbox"               : det["bbox"],
                 "detection_conf"     : det["confidence"],
-                "classification"     : cls.get("label", "unknown"),
+                "classification"     : label,
                 "label_short"        : label_short,
                 "classification_conf": cls.get("confidence", 0.0),
-                "probs"              : cls.get("probs", {}),
+                "probs"              : cls.get("probabilities", {}),
                 # v3 additions:
                 "health_score"       : h_score,
                 "bleach_stage"       : h_stage,
