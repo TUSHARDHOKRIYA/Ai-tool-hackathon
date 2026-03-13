@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { Upload, X, CheckCircle2, Loader2, MapPin, Waves, DownloadCloud } from 'lucide-react';
+import { Upload, X, CheckCircle2, Loader2, MapPin, Activity, DownloadCloud } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -202,174 +202,191 @@ export default function CoralHealthDetector() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-        {/* ── Left: upload + controls ── */}
-        <div className="space-y-4">
-          <Card className="border-2">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base flex items-center gap-2">
-                <Upload className="h-4 w-4" /> Upload Images or Folder
-              </CardTitle>
-              <CardDescription>
-                Drag &amp; drop files/folders here. If images contain GPS they will be automatically saved to the database.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div
-                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
-                onClick={() => folderInputRef.current?.click()}
-                className={`cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all ${isDragging
-                  ? 'border-primary bg-primary/5 scale-[1.01]'
-                  : 'border-muted-foreground/25 hover:border-emerald-500/60 hover:bg-emerald-500/5'
-                  }`}
-              >
-                <Upload className="mx-auto h-10 w-10 mb-2 text-muted-foreground" />
-                <p className="font-semibold">Drop images or folders here</p>
-                <p className="text-sm text-muted-foreground">or click to browse</p>
-              </div>
+    <div className="min-h-screen bg-gradient-to-b from-[#e5f1f7] to-white/90 pt-16 pb-24 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-6xl mx-auto space-y-12">
 
-              {/* Hidden inputs */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
-              />
-              {/* Input for folder select */}
-              <input
-                ref={folderInputRef}
-                type="file"
-                accept="image/*"
-                // @ts-expect-error webkitdirectory is non-standard but widely supported
-                webkitdirectory="true"
-                directory=""
-                multiple
-                className="hidden"
-                onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
-              />
-
-              <div className="flex gap-2 mt-4 justify-center">
-                <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
-                  Select Files
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => folderInputRef.current?.click()}>
-                  Select Folder
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="flex gap-3">
-            {jobs.filter((j) => j.step === 'queued' || j.step === 'error').length > 0 && (
-              <Button
-                className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-semibold"
-                onClick={handleRun}
-                disabled={running}
-              >
-                {running ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing {jobs.filter(j => j.step === 'queued').length} items…</>
-                ) : (
-                  <><Waves className="mr-2 h-4 w-4" /> Check Coral Health ({jobs.filter((j) => j.step === 'queued').length})</>
-                )}
-              </Button>
-            )}
-            {jobs.length > 0 && !running && (
-              <Button variant="outline" onClick={handleClear}>
-                Clear List
-              </Button>
-            )}
+        {/* Hero Section */}
+        <div className="text-center space-y-6 max-w-3xl mx-auto">
+          <div className="mx-auto w-16 h-16 bg-teal-600 rounded-full flex items-center justify-center shadow-lg shadow-teal-600/20">
+            <Activity className="w-8 h-8 text-white" />
           </div>
+          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900">
+            Coral Health Check
+          </h1>
+          <p className="text-lg text-slate-600 leading-relaxed">
+            Upload an underwater image and our YOLOv11 model will detect and isolate every coral specimen in real time. Understanding coral health is crucial for reef conservation and early disease detection.
+          </p>
         </div>
 
-        {/* ── Right: results/job list ── */}
-        <div className="space-y-4">
-          <Card className="border-2 h-full min-h-[400px]">
-            <CardHeader className="pb-3 border-b">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-base">Analysis Progress</CardTitle>
-                  <CardDescription>
-                    Files loaded: {jobs.length} | Done: {done}
-                  </CardDescription>
+        {/* Main Content Grid */}
+        <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
+          {/* ── Left: upload + controls ── */}
+          <div className="space-y-6">
+            <Card className="border shadow-sm bg-white/50 backdrop-blur-sm overflow-hidden">
+              <CardHeader className="bg-white/50 border-b pb-4">
+                <CardTitle className="text-lg flex items-center gap-2 text-slate-800">
+                  <Upload className="h-5 w-5 text-teal-600" /> Upload Images or Folder
+                </CardTitle>
+                <CardDescription className="text-slate-500">
+                  Drag &amp; drop files/folders here. If images contain GPS they will be automatically saved to the database.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
+                  onDrop={handleDrop}
+                  onClick={() => folderInputRef.current?.click()}
+                  className={`cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all ${isDragging
+                    ? 'border-primary bg-primary/5 scale-[1.01]'
+                    : 'border-muted-foreground/25 hover:border-emerald-500/60 hover:bg-emerald-500/5'
+                    }`}
+                >
+                  <Upload className="mx-auto h-10 w-10 mb-2 text-muted-foreground" />
+                  <p className="font-semibold">Drop images or folders here</p>
+                  <p className="text-sm text-muted-foreground">or click to browse</p>
                 </div>
-                {!running && done > 0 && (
-                  <Button
-                    size="sm"
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
-                    onClick={handleDownloadZip}
-                  >
-                    <DownloadCloud className="w-4 h-4 mr-2" />
-                    Download ZIP (Images + Labels)
+
+                {/* Hidden inputs */}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
+                />
+                {/* Input for folder select */}
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  accept="image/*"
+                  // @ts-expect-error webkitdirectory is non-standard but widely supported
+                  webkitdirectory="true"
+                  directory=""
+                  multiple
+                  className="hidden"
+                  onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
+                />
+
+                <div className="flex gap-2 mt-4 justify-center">
+                  <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                    Select Files
                   </Button>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              {jobs.length > 0 ? (
-                <div className="divide-y max-h-[500px] overflow-y-auto">
-                  {jobs.map((job) => (
-                    <div key={job.id} className="p-4 flex flex-col gap-2 hover:bg-muted/30">
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0 pr-4">
-                          <p className="text-sm font-medium truncate" title={job.file.webkitRelativePath || job.file.name}>
-                            {job.file.webkitRelativePath || job.file.name}
-                          </p>
-                          <div className="flex items-center gap-2 mt-1">
-                            {job.gps ? (
-                              <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50">GPS Found (Saving to DB)</Badge>
-                            ) : job.step === 'done' || job.step === 'saving' || job.step === 'detecting' ? (
-                              <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200 bg-amber-50">No GPS (Skip DB)</Badge>
-                            ) : null}
-                            <span className="text-[11px] text-muted-foreground">
-                              {job.step === 'error' ? `❌ ${job.error}` : stepLabel(job.step)}
-                            </span>
+                  <Button variant="outline" size="sm" onClick={() => folderInputRef.current?.click()}>
+                    Select Folder
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="flex gap-3">
+              {jobs.filter((j) => j.step === 'queued' || j.step === 'error').length > 0 && (
+                <Button
+                  className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-semibold"
+                  onClick={handleRun}
+                  disabled={running}
+                >
+                  {running ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing {jobs.filter(j => j.step === 'queued').length} items…</>
+                  ) : (
+                    <><Activity className="mr-2 h-4 w-4" /> Check Coral Health ({jobs.filter((j) => j.step === 'queued').length})</>
+                  )}
+                </Button>
+              )}
+              {jobs.length > 0 && !running && (
+                <Button variant="outline" onClick={handleClear}>
+                  Clear List
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* ── Right: results/job list ── */}
+          <div className="space-y-4">
+            <Card className="border-2 h-full min-h-[400px]">
+              <CardHeader className="pb-3 border-b">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base">Analysis Progress</CardTitle>
+                    <CardDescription>
+                      Files loaded: {jobs.length} | Done: {done}
+                    </CardDescription>
+                  </div>
+                  {!running && done > 0 && (
+                    <Button
+                      size="sm"
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                      onClick={handleDownloadZip}
+                    >
+                      <DownloadCloud className="w-4 h-4 mr-2" />
+                      Download ZIP (Images + Labels)
+                    </Button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                {jobs.length > 0 ? (
+                  <div className="divide-y max-h-[500px] overflow-y-auto">
+                    {jobs.map((job) => (
+                      <div key={job.id} className="p-4 flex flex-col gap-2 hover:bg-muted/30">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0 pr-4">
+                            <p className="text-sm font-medium truncate" title={job.file.webkitRelativePath || job.file.name}>
+                              {job.file.webkitRelativePath || job.file.name}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              {job.gps ? (
+                                <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50">GPS Found (Saving to DB)</Badge>
+                              ) : job.step === 'done' || job.step === 'saving' || job.step === 'detecting' ? (
+                                <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200 bg-amber-50">No GPS (Skip DB)</Badge>
+                              ) : null}
+                              <span className="text-[11px] text-muted-foreground">
+                                {job.step === 'error' ? `❌ ${job.error}` : stepLabel(job.step)}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 items-center">
+                            {job.step === 'done' && job.health_score != null && (
+                              <SeverityBadge
+                                healthScore={job.health_score}
+                                stage={(job.stage ?? 'Healthy') as BleachStage}
+                                size="sm"
+                                showScore
+                              />
+                            )}
+                            {(job.step === 'detecting' || job.step === 'saving' || job.step === 'gps') && (
+                              <Loader2 className="h-4 w-4 animate-spin text-emerald-500 shrink-0" />
+                            )}
+                            {job.step === 'done' && <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />}
+                            <button
+                              className="text-muted-foreground hover:text-red-500 transition-colors ml-1"
+                              onClick={() => setJobs((prev) => prev.filter((j) => j.id !== job.id))}
+                              title="Remove from list"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
                           </div>
                         </div>
-
-                        <div className="flex gap-2 items-center">
-                          {job.step === 'done' && job.health_score != null && (
-                            <SeverityBadge
-                              healthScore={job.health_score}
-                              stage={(job.stage ?? 'Healthy') as BleachStage}
-                              size="sm"
-                              showScore
-                            />
-                          )}
-                          {(job.step === 'detecting' || job.step === 'saving' || job.step === 'gps') && (
-                            <Loader2 className="h-4 w-4 animate-spin text-emerald-500 shrink-0" />
-                          )}
-                          {job.step === 'done' && <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />}
-                          <button
-                            className="text-muted-foreground hover:text-red-500 transition-colors ml-1"
-                            onClick={() => setJobs((prev) => prev.filter((j) => j.id !== job.id))}
-                            title="Remove from list"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </div>
+                        <Progress
+                          value={stepPct(job.step)}
+                          className={`h-1.5 ${job.step === 'error' ? '[&>div]:bg-red-500' : '[&>div]:bg-emerald-500'}`}
+                        />
                       </div>
-                      <Progress
-                        value={stepPct(job.step)}
-                        className={`h-1.5 ${job.step === 'error' ? '[&>div]:bg-red-500' : '[&>div]:bg-emerald-500'}`}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex flex-col items-center justify-center h-64 text-muted-foreground p-8 text-center">
-                  <Waves className="h-12 w-12 opacity-20 mb-4" />
-                  <p className="text-sm">
-                    Upload single or bulk coral images to analyze them.
-                  </p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-80 text-muted-foreground p-8 text-center bg-white/20">
+                    <Activity className="h-12 w-12 opacity-20 mb-4 text-teal-600" />
+                    <p className="text-sm font-medium text-slate-500">
+                      Upload single or bulk coral images to analyze them.
+                    </p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </div>
     </div>

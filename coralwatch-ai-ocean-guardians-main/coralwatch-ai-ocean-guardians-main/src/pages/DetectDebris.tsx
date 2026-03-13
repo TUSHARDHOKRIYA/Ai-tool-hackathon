@@ -11,7 +11,7 @@ const DetectDebris = () => {
     <div className="min-h-screen bg-gradient-to-b from-background to-muted/20">
       <Header />
 
-      <main className="container mx-auto px-4 py-8 sm:px-6 lg:px-8">
+      <main className="container mx-auto px-4 pt-24 pb-8 sm:px-6 lg:px-8">
         <Button
           variant="ghost"
           onClick={() => navigate("/")}

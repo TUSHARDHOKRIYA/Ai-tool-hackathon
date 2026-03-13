@@ -1,0 +1,652 @@
+🪸  REEF INTELLIGENCE PLATFORM  v3.0
+Revised Full Product Roadmap
+Strict Threat Logic  •  Multi-Factor Scoring  •  How to Start Building
+Hackathon Build Plan — March 2026  |  All Revisions Included
+PHASE 0 — Current Foundation
+These features are already built and working:
+📸
+Image Upload + Binary Classifier
+ResNet model returns Bleached or Healthy with a confidence probability (0.0–1.0)
+🗺️
+EXIF GPS Extraction
+exifr library extracts lat/lon from image metadata on upload
+📍
+Manual Pin Fallback
+If no EXIF GPS, user drops a pin on map to assign coordinates
+REVISION 1 — Severity Index from Your Existing ResNet
+You do NOT need to retrain your model. Your ResNet already outputs a confidence probability. That number IS the severity score — you just need to reframe how you read it.
+Key Insight: Confidence Score = Severity
+When your model says 'Bleached: 0.87' — it already knows HOW bleached. The 0.87 is the severity. You were just hiding this information by forcing a yes/no output.
+Severity Mapping Logic
+Bleach Confidence
+Health Score
+Stage
+Color on Map
+0.00 – 0.30
+85 – 100
+Healthy
+🟢 Green
+0.31 – 0.54
+55 – 84
+Early Thermal Stress
+🟡 Yellow
+0.55 – 0.74
+30 – 54
+Partial Bleaching
+🟠 Orange
+0.75 – 0.89
+10 – 29
+Severe Bleaching
+🔴 Red
+0.90 – 1.00
+0 – 9
+Critical / Mortality Risk
+⚫ Black
+Step 1 — Define Strict Thresholds (All in One Place)
+Never scatter magic numbers across your codebase. Every threshold lives in one constants file so scientists can tune them:
+# constants.py — single source of truth for all thresholds
+THRESHOLDS = {
+    "sst": {
+        "baseline": 28.0,   # healthy max for most coral species
+        "watch":    28.5,   # begin monitoring
+        "stress":   29.0,   # thermal stress begins
+        "bleach":   29.5,   # NOAA standard bleaching threshold
+        "severe":   30.5,   # mass bleaching likely
+        "critical": 31.5,   # mortality risk
+    },
+    "ph": {
+        "healthy":  8.3,
+        "watch":    8.1,
+        "stress":   7.9,
+        "critical": 7.75,
+    },
+    "uv": { "low": 3, "moderate": 6, "high": 8, "extreme": 11 },
+    "dhw": {
+        "watch":  0,   # begin heat stress accumulation
+        "alert":  4,   # bleaching likely (NOAA standard)
+        "severe": 8,   # mass bleaching / mortality
+    },
+    "health_score": {
+        "healthy":   75,
+        "watch":     55,
+        "stressed":  40,
+        "bleached":  25,
+        "critical":  10,
+    },
+    "decline_rate": { "mild": 10, "moderate": 20, "rapid": 30 },
+    "days_no_data": { "stale": 30, "blind": 60 }
+}
+Step 2 — Strict Multi-Factor Threat Engine
+Every threat requires MULTIPLE corroborating signals. One hot day is not a bleaching event. One bad pH reading is not acidification. The engine cross-checks everything:
+SEVERITY_ORDER = {
+    "CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "WATCH": 3, "LOW": 4, "INFO": 5
+}
+def evaluate_threats(snapshot, history, ocean_data):
+    threats = []
+    sst     = ocean_data['sst']
+    ph      = ocean_data['ph']
+    uv      = ocean_data['uv']
+    dhw     = ocean_data['dhw']
+    score   = snapshot['health_score']
+    prev    = history[-1]['health_score'] if history else score
+    decline = prev - score  # positive = getting worse
+    T = THRESHOLDS
+    # ── THERMAL: SST must be confirmed by DHW accumulation ──
+    # A single spike without heat buildup is NOT a bleaching event
+    if sst >= T['sst']['critical'] and dhw >= T['dhw']['severe']:
+        threats.append(threat('THERMAL', 'CRITICAL',
+            f'SST {sst}C + DHW {dhw} — mass mortality risk'))
+    elif sst >= T['sst']['severe'] and dhw >= T['dhw']['alert']:
+        threats.append(threat('THERMAL', 'HIGH',
+            f'SST {sst}C sustained — mass bleaching likely'))
+    elif sst >= T['sst']['bleach'] and dhw >= T['dhw']['watch']:
+        threats.append(threat('THERMAL', 'MEDIUM',
+            f'SST {sst}C at bleach threshold, DHW accumulating'))
+    elif sst >= T['sst']['stress']:
+        threats.append(threat('THERMAL', 'WATCH',
+            f'SST {sst}C — stress window, monitor daily'))
+    # ── ACIDIFICATION: pH severity escalates if reef already weak ──
+    if ph <= T['ph']['critical']:
+        sev = 'CRITICAL' if score < T['health_score']['stressed'] else 'HIGH'
+        threats.append(threat('ACIDIFICATION', sev,
+            f'pH {ph} — carbonate dissolution active, skeleton damage'))
+    elif ph <= T['ph']['stress']:
+        sev = 'HIGH' if score < T['health_score']['watch'] else 'MEDIUM'
+        threats.append(threat('ACIDIFICATION', sev,
+            f'pH {ph} — below safe threshold, compounding bleach stress'))
+    elif ph <= T['ph']['watch']:
+        threats.append(threat('ACIDIFICATION', 'WATCH',
+            f'pH {ph} — approaching stress zone'))
+    # ── RAPID DECLINE: only meaningful with history to compare ──
+    if history and decline >= T['decline_rate']['rapid']:
+        threats.append(threat('RAPID_DECLINE', 'CRITICAL',
+            f'Score dropped {decline}pts — emergency monitoring needed'))
+    elif history and decline >= T['decline_rate']['moderate']:
+        threats.append(threat('RAPID_DECLINE', 'HIGH',
+            f'Score dropped {decline}pts — accelerating event'))
+    elif history and decline >= T['decline_rate']['mild']:
+        threats.append(threat('RAPID_DECLINE', 'MEDIUM',
+            f'Score dropped {decline}pts — declining trend confirmed'))
+    # ── COMPOUND STRESS: multiple stressors = independent threat ──
+    # Most dangerous scenario — triggers even if individual ones are WATCH
+    active = sum([
+        sst   >= T['sst']['stress'],
+        ph    <= T['ph']['stress'],
+        uv    >= T['uv']['high'],
+        dhw   >= T['dhw']['watch'],
+        score  < T['health_score']['stressed'],
+    ])
+    if active >= 4:
+        threats.append(threat('COMPOUND', 'CRITICAL',
+            f'{active}/5 stressors active — recovery unlikely without intervention'))
+    elif active >= 3:
+        threats.append(threat('COMPOUND', 'HIGH',
+            f'{active}/5 stressors active — compounded risk'))
+    # ── UV: only dangerous when combined with thermal stress ──
+    if uv >= T['uv']['extreme'] and sst >= T['sst']['stress']:
+        threats.append(threat('UV_AMPLIFICATION', 'HIGH',
+            f'UV {uv} + SST {sst}C — UV amplifying thermal damage ~30%'))
+    elif uv >= T['uv']['high']:
+        threats.append(threat('UV', 'LOW',
+            f'UV {uv} — elevated but not critical standalone'))
+    # ── DATA GAP: unknown status during risk window ──
+    days = days_since_last_upload(history)
+    if days >= T['days_no_data']['blind']:
+        threats.append(threat('NO_DATA', 'HIGH',
+            f'{days} days without survey — reef status unknown'))
+    elif days >= T['days_no_data']['stale']:
+        threats.append(threat('NO_DATA', 'MEDIUM',
+            f'{days} days since last upload — data stale'))
+    return sorted(threats, key=lambda t: SEVERITY_ORDER[t['severity']])
+def threat(type, severity, message):
+    return {'type': type, 'severity': severity, 'message': message}
+REVISION 2 — Region / Cluster Radius
+50 meters is too small for ocean scale. Reefs span kilometers. Here is the revised tiered region system:
+Level
+Radius
+What it Represents
+Use Case
+Micro Patch
+200 m
+One dive site, single coral colony cluster
+Detailed research dives
+Reef Zone
+2 km
+A named section of a reef (North Wall, Lagoon)
+Default for app uploads
+Reef System
+20 km
+An entire reef (e.g. one section of GBR)
+Regional dashboard view
+Ocean Region
+200 km
+A whole oceanic area
+NGO / government reports
+Default Clustering Radius: 2 km  |  User-adjustable per batch upload
+How Clustering Works
+Image arrives → GPS extracted → search DB for any reef within 2 km
+Match found → link image to that reef's history (same reef_id)
+No match → create new reef zone, assign unique reef_id
+Multiple matches → link to nearest reef centroid
+Researchers can override and manually assign to a specific reef_id
+PostGIS Query for Matching
+-- Find nearest reef within 2km of uploaded image coordinates
+SELECT reef_id, reef_name,
+       ST_Distance(location::geography,
+         ST_MakePoint(:lon,:lat)::geography) AS dist_meters
+FROM reefs
+WHERE ST_DWithin(location::geography,
+        ST_MakePoint(:lon,:lat)::geography, 2000)
+ORDER BY dist_meters ASC
+LIMIT 1;
+REVISION 3 — Strict Threat Indicators (Multi-Factor, No ML)
+The threat engine in Revision 1 covers the full logic. Below is the rules reference table showing exactly what each threat requires. Notice every HIGH/CRITICAL threat needs at least two conditions met — no single data point can trigger a critical alert alone.
+Strict Threat Rules — Multi-Condition Requirements
+Threat Type
+Conditions Required (ALL must be true)
+Severity
+🌡️ Thermal — CRITICAL
+SST ≥ 31.5°C  AND  DHW ≥ 8
+CRITICAL
+🌡️ Thermal — HIGH
+SST ≥ 30.5°C  AND  DHW ≥ 4
+HIGH
+🌡️ Thermal — MEDIUM
+SST ≥ 29.5°C  AND  DHW ≥ 0 (accumulating)
+MEDIUM
+🌡️ Thermal — WATCH
+SST ≥ 29.0°C  (standalone watch only)
+WATCH
+⚗️ Acidification — CRITICAL
+pH ≤ 7.75  AND  health score < 40
+CRITICAL
+⚗️ Acidification — HIGH
+pH ≤ 7.9  AND  health score < 55
+HIGH
+⚗️ Acidification — MEDIUM
+pH ≤ 7.9  AND  reef still healthy
+MEDIUM
+📉 Rapid Decline — CRITICAL
+Score dropped ≥ 30 pts since last upload
+CRITICAL
+📉 Rapid Decline — HIGH
+Score dropped ≥ 20 pts since last upload
+HIGH
+📉 Rapid Decline — MEDIUM
+Score dropped ≥ 10 pts since last upload
+MEDIUM
+⚠️ Compound Stress — CRITICAL
+4 or 5 of: high SST, low pH, high UV, high DHW, low score
+CRITICAL
+⚠️ Compound Stress — HIGH
+3 of the above 5 stressors active simultaneously
+HIGH
+☀️ UV Amplification
+UV ≥ 11  AND  SST ≥ 29.0°C  (UV alone = LOW only)
+HIGH
+📸 No Data — HIGH
+No upload in 60+ days
+HIGH
+📸 No Data — MEDIUM
+No upload in 30–59 days
+MEDIUM
+Threat Badge Display
+On the reef dashboard, show threats as colored badges — no AI involved, just the rules above:
+🔴
+HIGH Threat — Thermal Stress
+SST 30.8°C — 1.3° above bleaching threshold for this reef zone. Immediate monitoring recommended.
+🟠
+MEDIUM Threat — Acidification
+pH 7.85 — approaching critical carbonate dissolution level. Monitor weekly.
+🟡
+LOW Threat — UV Radiation
+UV Index 9 compounding existing thermal stress. Non-critical.
+FREE DATABASE — Recommendation & Setup
+For a hackathon with geo-spatial queries (finding reefs by distance), you need a database that supports PostGIS. Here is the best free option:
+Recommended: Supabase (Free Tier)  —  PostgreSQL + PostGIS built-in
+Why Supabase
+Free tier: 500 MB storage, 2 GB bandwidth, 50,000 monthly active users — more than enough
+PostgreSQL with PostGIS pre-installed — geo queries work out of the box
+Built-in REST API — no backend needed for basic queries
+Dashboard to view your data visually during the demo
+No credit card required to sign up
+How to Get Started
+Go to supabase.com → click Start for Free → sign in with GitHub
+Create New Project → give it a name → choose a region closest to your users
+Your connection string and API keys appear in: Settings → API
+Enable PostGIS: go to SQL Editor → run: CREATE EXTENSION IF NOT EXISTS postgis;
+Alternative Free Databases
+Database
+Free Tier
+PostGIS?
+Best For
+Supabase
+500 MB / unlimited rows
+✅ Yes (built-in)
+Recommended — easiest setup
+Railway PostgreSQL
+500 MB, sleeps after inactivity
+✅ With extension
+Good backup option
+Neon DB
+3 GB, serverless PostgreSQL
+✅ Yes
+Good for serverless backends
+MongoDB Atlas
+512 MB, has geo-index
+❌ No PostGIS
+Use only if no geo queries needed
+PlanetScale
+5 GB MySQL
+❌ No
+Skip — no geo support
+Reef Database Schema
+-- Run this in Supabase SQL Editor
+CREATE EXTENSION IF NOT EXISTS postgis;
+CREATE TABLE reefs (
+  reef_id    UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  reef_name  TEXT,
+  location   GEOGRAPHY(Point, 4326),   -- PostGIS geo point
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE TABLE reef_snapshots (
+  id            UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  reef_id       UUID REFERENCES reefs(reef_id),
+  captured_at   TIMESTAMPTZ,            -- from EXIF timestamp
+  uploaded_at   TIMESTAMPTZ DEFAULT now(),
+  health_score  INTEGER,                -- 0-100
+  bleach_stage  TEXT,                   -- Healthy / Stress / Partial etc.
+  bleach_confidence FLOAT,              -- raw model probability
+  sst_celsius   FLOAT,                  -- from NOAA API
+  ocean_ph      FLOAT,                  -- from pH buoy API
+  uv_index      FLOAT,                  -- from OpenUV API
+  threats       JSONB,                  -- array of threat objects
+  image_url     TEXT,                   -- Cloudinary / S3 URL
+  uploaded_by   TEXT
+);
+-- Index for fast geo queries
+CREATE INDEX reefs_location_idx ON reefs USING GIST(location);
+FREE APIs — Where to Get Each Key
+None of these require payment. All have free tiers sufficient for a hackathon demo.
+1. Sea Surface Temperature — NOAA ERDDAP
+🌡️
+NOAA ERDDAP — Completely Free, No Key Needed
+Direct HTTP API. No signup, no API key. Just call the URL with your coordinates.
+// No API key needed — just fetch this URL
+const lat = 18.92, lon = 72.83;
+const url = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/
+  erdHadSST.json?sst[(last)][(${lat})][(${lon})]`;
+const res  = await fetch(url);
+const data = await res.json();
+const sst  = data.table.rows[0][3]; // temperature °C
+2. UV Index — OpenUV
+☀️
+OpenUV API — Free Tier (50 calls/day)
+Sign up at openuv.io → get API key instantly on dashboard. 50 free calls/day is fine for a hackathon.
+Step
+Action
+1. Sign up
+Go to openuv.io → click Sign Up (GitHub login works)
+2. Get key
+Dashboard → My API Keys → copy your key
+3. Use it
+Add header: x-access-token: YOUR_KEY to requests
+Endpoint
+GET https://api.openuv.io/api/v1/uv?lat=18.92&lng=72.83
+3. Ocean pH — MBARI MBIS / Alternative
+⚗️
+Option A: MBARI MBIS — Free Research API
+Email mbis@mbari.org to request access. Takes 1-2 days. Good for real deployments.
+⚗️
+Option B: World Ocean Atlas (NOAA) — No Key Needed
+Pre-computed monthly pH averages by coordinate. Not real-time but good enough for demo.
+// World Ocean Atlas — no key needed
+// Returns climatological average pH for that coordinate
+const url = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/
+  noaa_esrl_5a7a_7844_5b74.json?pH[(last)][(${lat})][(${lon})]`;
+4. Image Storage — Cloudinary
+📦
+Cloudinary Free Tier — 25 GB storage, 25 GB bandwidth/month
+Sign up at cloudinary.com → Dashboard shows CLOUD_NAME, API_KEY, API_SECRET instantly.
+Step
+Action
+1. Sign up
+cloudinary.com → Sign Up Free (no card needed)
+2. Get keys
+Dashboard → copy Cloud Name, API Key, API Secret
+3. Upload
+POST image to https://api.cloudinary.com/v1_1/YOUR_CLOUD/image/upload
+4. Get URL
+Response includes secure_url — save this in reef_snapshots.image_url
+5. All APIs Summary
+API
+Data
+Free Tier
+Key Required?
+Where to Get
+NOAA ERDDAP
+Sea Surface Temp
+Unlimited
+❌ No key
+Just call the URL
+OpenUV
+UV Index
+50 calls/day
+✅ Yes
+openuv.io → signup
+World Ocean Atlas
+Ocean pH (avg)
+Unlimited
+❌ No key
+Just call the URL
+MBARI MBIS
+Real-time pH
+Research access
+✅ Yes
+Email mbari.org
+Supabase
+Database + API
+500 MB free
+✅ Yes
+supabase.com → signup
+Cloudinary
+Image Storage
+25 GB free
+✅ Yes
+cloudinary.com → signup
+WATER QUALITY DASHBOARD — No Model Training Needed
+You do not train a model for water quality. You fetch the numbers from APIs and display them with thresholds. The intelligence is in the thresholds, not ML.
+Fetch → Compare to Threshold → Show Risk Level
+Water Quality Thresholds
+Metric
+Healthy Range
+Stress Zone
+Critical
+Unit
+Sea Surface Temp (SST)
+< 28.5°C
+28.5 – 29.5°C
+> 29.5°C
+°C
+Ocean pH
+8.1 – 8.3
+7.9 – 8.1
+< 7.9
+pH units
+UV Index
+0 – 5
+6 – 8
+> 8
+Index 0-11+
+DHW (Degree Heating Weeks)
+0
+0 – 4
+> 4
+°C-weeks
+DHW — The Most Important Metric
+Degree Heating Weeks (DHW) is the gold standard used by NOAA Coral Reef Watch. It measures how long a reef has been exposed to heat stress. No API key needed — NOAA provides it free:
+DHW 0: No stress
+DHW 4: Bleaching likely
+DHW 8: Severe bleaching / mortality
+NOAA Coral Reef Watch API: coralreefwatch.noaa.gov/product/5km — no key required
+How to Display It
+Show each metric as a gauge card on the reef dashboard:
+🌡️
+SST: 30.2°C — STRESS
+Threshold: 29.5°C. Currently 0.7° above bleaching threshold. DHW accumulating.
+⚗️
+pH: 8.05 — WATCH
+Slightly below optimal (8.1). Monitor for downward trend.
+☀️
+UV Index: 6 — NORMAL
+Within acceptable range. Not contributing to additional stress.
+REVISED BUILD PHASES
+PHASE 1
+Day 1 — Morning
+Bulk Upload + EXIF + Geo Clustering
+• Multi-file upload UI with progress bar
+• Parallel EXIF extraction from all images
+• Cluster images by 2 km radius (configurable)
+• Preview clusters on map before running AI
+PHASE 2
+Day 1 — Afternoon
+Severity Index + DB Storage
+• Reframe ResNet confidence as 0-100 health score
+• Map to 5 bleaching stages (no retraining)
+• Supabase DB: save reef + snapshot records
+• PostGIS reef matching — link images to existing reefs
+• Fetch SST from NOAA + store with each snapshot
+PHASE 3
+Day 2 — Morning
+Water Quality + Threat Badges
+• Fetch UV from OpenUV API per coordinate
+• Fetch pH from World Ocean Atlas
+• Fetch DHW from NOAA Coral Reef Watch
+• Rule-based threat detection engine
+• Display threat badges on reef detail page
+PHASE 4
+Day 2 — Afternoon
+Timeline + Heatmap
+• Health score timeline chart per reef
+• SST + DHW overlay on the timeline
+• Recovery rate calculator from history
+• Live heatmap — color coded by health score
+• Time-slider to animate bleaching spread
+PHASE 5
+Demo Polish
+Alerts + Export
+• Auto-alert when reef SST crosses threshold
+• Downloadable reef health report
+• Public API endpoint for NGO data access
+• Leaderboard of top citizen science contributors
+HOW TO START BUILDING — Step by Step
+Exact sequence to go from your current classifier to a working full pipeline. Do these in order — each step gives you a working demo.
+PRE-HACKATHON (Do This Before the Event)
+SETUP 1
+30 minutes
+Supabase Database
+• Go to supabase.com → Sign up with GitHub (free, no card)
+• Create New Project → pick a name → select nearest region
+• Go to SQL Editor → paste and run the full schema from this doc
+• Go to Settings → API → copy: Project URL, anon public key, service role key
+• Test: go to Table Editor → you should see reefs and reef_snapshots tables
+SETUP 2
+20 minutes
+Get Your API Keys
+• OpenUV: go to openuv.io → Sign Up → Dashboard → copy API key
+• Cloudinary: go to cloudinary.com → Sign Up Free → copy Cloud Name + API Key + Secret
+• NOAA ERDDAP + World Ocean Atlas + NOAA Coral Reef Watch: NO signup needed
+• Create a .env file: SUPABASE_URL, SUPABASE_KEY, OPENUV_KEY, CLOUDINARY credentials
+• Never commit .env to git — add it to .gitignore immediately
+SETUP 3
+20 minutes
+Test Each API Manually
+• Test NOAA SST: open browser → paste ERDDAP URL with your test coordinates
+• Test OpenUV: use Postman or curl with your key and a test lat/lon
+• Test Supabase: use their JS client to insert one dummy row into reef_snapshots
+• Test Cloudinary: upload one test image via their dashboard
+• Only move forward once all 4 are confirmed working
+HACKATHON DAY 1 — The Data Pipeline
+DAY 1A
+Morning
+Wire Upload → Severity → DB
+• Add get_severity() function — takes bleach_prob, returns score + stage
+• On image upload: extract EXIF GPS → run ResNet → call get_severity()
+• Upload image to Cloudinary → get back the secure_url
+• Fetch SST from NOAA for the extracted coordinates
+• Check Supabase for existing reef within 2km using PostGIS query
+• If match: use existing reef_id. If no match: INSERT new reef row first
+• INSERT reef_snapshots row with all data: score, stage, sst, image_url, reef_id
+• Goal: one upload creates one complete DB record end-to-end
+DAY 1B
+Afternoon
+Add Water Quality + Threats
+• Fetch UV from OpenUV for each upload coordinate
+• Fetch pH from World Ocean Atlas (NOAA ERDDAP)
+• Fetch DHW from NOAA Coral Reef Watch API
+• Run evaluate_threats() with all fetched data + DB history for that reef
+• Save threats array as JSONB into reef_snapshots.threats column
+• Build simple reef detail page: show score, stage, all water quality values, threat badges
+• Goal: click any reef → see full current status with threat indicators
+HACKATHON DAY 2 — The Intelligence Layer
+DAY 2A
+Morning
+Timeline + History View
+• Query all snapshots for a reef_id ordered by captured_at
+• Plot health_score over time using Recharts LineChart
+• Add SST as a second line on the same chart (dual Y-axis)
+• Add DHW as a shaded area — shows heat stress accumulation visually
+• Add before/after image slider: worst score image vs most recent
+• Calculate recovery rate: (current_score - min_score) / days_since_min
+• Goal: click a reef → see its full health history with environmental context
+DAY 2B
+Afternoon
+Live Heatmap
+• Query latest snapshot per reef_id from Supabase
+• Plot each reef as a colored circle on Mapbox or Leaflet map
+• Color scale: green (score > 75) → yellow → orange → red → black (< 10)
+• Click any circle → open reef detail page
+• Add a time-slider: replay historical snapshots to animate bleaching spread
+• Goal: demo shows the map lighting up red as bleaching progresses
+POLISH
+Final Hours
+Demo-Ready Finishing Touches
+• Add bulk upload UI — React Dropzone accepting 100+ images at once
+• Add progress bar showing: extracting EXIF → classifying → saving → done
+• Add a summary banner: 'X reefs monitored, Y currently at risk, Z critical'
+• Make sure the pitch demo flow works: upload → map → click reef → timeline
+• Prepare 3 sample images with known GPS for the live demo
+MASTER CHECKLIST
+Feature
+Status
+Notes
+Image upload + binary classifier
+✅ Done
+ResNet working
+EXIF GPS extraction
+✅ Done
+exifr library
+Manual pin fallback
+✅ Done
+Map UI ready
+Severity score from confidence prob
+🔨 Build
+No retraining needed — 1 function
+5-stage bleaching classification
+🔨 Build
+Threshold mapping from score
+Bulk multi-image upload
+🔨 Build
+React Dropzone + queue
+2 km geo-clustering
+🔨 Build
+PostGIS ST_DWithin()
+Supabase DB + PostGIS schema
+🔨 Build
+Free — supabase.com
+Reef matching / history linking
+🔨 Build
+Query nearest reef in DB
+SST from NOAA (no key needed)
+🔨 Build
+Free API call
+UV from OpenUV
+🔨 Build
+Free key at openuv.io
+pH from World Ocean Atlas
+🔨 Build
+Free, no key
+Strict multi-factor threat engine
+🔨 Build
+evaluate_threats() in constants.py
+Compound stress detection (3+ stressors)
+🔨 Build
+Independent threat type
+DHW from NOAA Coral Reef Watch
+🔨 Build
+Free, no key
+Rule-based threat badges
+🔨 Build
+Pure code, no ML
+Water quality dashboard
+🔨 Build
+Gauge cards per metric
+Health timeline chart
+🔨 Build
+Recharts or Chart.js
+Recovery rate calculator
+🔨 Build
+Math from history
+Live reef heatmap
+🔨 Build
+Mapbox / Leaflet
+Image storage (Cloudinary)
+🔨 Build
+Free 25 GB
+Bleaching risk predictor
+🎯 Stretch
+SST trend extrapolation
+Automated alert system
+🎯 Stretch
+Webhook / email
+Reef Intelligence Platform v3.0  •  Hackathon Edition  •  March 2026

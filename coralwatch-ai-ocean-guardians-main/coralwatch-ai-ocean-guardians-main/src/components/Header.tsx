@@ -17,27 +17,13 @@ const Header = () => {
     <header className="fixed top-0 left-0 right-0 z-50 glass-ocean border-b border-accent/20">
       <nav className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
-          {/* Logo with Reflection Effect */}
+          {/* Logo */}
           <div className="flex items-center space-x-3">
-            <div className="relative group">
-              <img
-                src="/lovable-uploads/b0145202-4348-4c0d-b788-39ea583ccec6.png"
-                alt="CoralWatch Logo"
-                className="h-16 w-auto animate-float transition-transform duration-300 group-hover:scale-105"
-              />
-              {/* Reflection Effect */}
-              <div className="absolute top-full left-0 w-full h-8 overflow-hidden opacity-30">
-                <img
-                  src="/lovable-uploads/b0145202-4348-4c0d-b788-39ea583ccec6.png"
-                  alt=""
-                  className="h-16 w-auto transform scale-y-[-1] translate-y-[-100%] animate-float"
-                  style={{
-                    maskImage: 'linear-gradient(to bottom, rgba(0,0,0,0.3) 0%, transparent 100%)',
-                    WebkitMaskImage: 'linear-gradient(to bottom, rgba(0,0,0,0.3) 0%, transparent 100%)'
-                  }}
-                />
-              </div>
-            </div>
+            <img
+              src="/lovable-uploads/b0145202-4348-4c0d-b788-39ea583ccec6.png"
+              alt="CoralWatch Logo"
+              className="h-12 w-auto"
+            />
           </div>
 
           {/* Desktop Navigation */}
