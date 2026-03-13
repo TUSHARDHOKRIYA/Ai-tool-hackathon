@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import Header from '@/components/Header';
 import { ReefHeatmap } from '@/components/ReefHeatmap';
-import { BulkUploadPanel } from '@/components/BulkUploadPanel';
+
 import { SeverityBadge } from '@/components/SeverityBadge';
 import { getAllReefs, type Reef } from '@/lib/db';
 import type { BleachStage } from '@/lib/constants';
@@ -79,9 +79,7 @@ export default function ReefDashboard() {
                         <TabsTrigger value="list" className="gap-2">
                             <Waves className="h-4 w-4" /> Reef List
                         </TabsTrigger>
-                        <TabsTrigger value="upload" className="gap-2">
-                            <Upload className="h-4 w-4" /> Bulk Upload
-                        </TabsTrigger>
+
                         <TabsTrigger value="analysis" className="gap-2">
                             <LineChart className="h-4 w-4" /> Data Analysis
                         </TabsTrigger>
@@ -135,10 +133,7 @@ export default function ReefDashboard() {
                         )}
                     </TabsContent>
 
-                    {/* Bulk upload tab */}
-                    <TabsContent value="upload">
-                        <BulkUploadPanel />
-                    </TabsContent>
+
 
                     {/* Analysis tab */}
                     <TabsContent value="analysis">

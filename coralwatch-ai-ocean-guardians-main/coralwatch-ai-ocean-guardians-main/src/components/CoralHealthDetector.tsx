@@ -1,704 +1,377 @@
-import { useState, useCallback, useRef } from "react";
-import {
-  Upload,
-  X,
-  RefreshCw,
-  AlertTriangle,
-  CheckCircle2,
-  Loader2,
-  Clock,
-  Waves,
-  ZoomIn,
-  HeartPulse,
-  ShieldAlert,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Slider } from "@/components/ui/slider";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { useCoralDetection } from "@/hooks/use-coral-detection";
-import { useCoralClassification } from "@/hooks/use-coral-classification";
-import type { CoralDetection } from "@/lib/coral-detection/types";
-import type { ClassificationResult } from "@/lib/coral-classification/types";
+import { useCallback, useRef, useState } from 'react';
+import { Upload, X, CheckCircle2, Loader2, MapPin, Waves, DownloadCloud } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Progress } from '@/components/ui/progress';
+import { Badge } from '@/components/ui/badge';
+import { extractGPS } from '@/lib/exif';
+import { getSeverity } from '@/lib/severity';
+import { fetchAllOceanData } from '@/lib/ocean-apis';
+import { evaluateThreats } from '@/lib/threat-engine';
+import { saveSnapshot } from '@/lib/db';
+import { isSupabaseConfigured } from '@/lib/supabase';
+import { uploadImageToCloudinary } from '@/lib/cloudinary';
+import { SeverityBadge } from '@/components/SeverityBadge';
+import type { BleachStage } from '@/lib/constants';
+import JSZip from 'jszip';
+import { saveAs } from 'file-saver';
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+const SPACE2_URL = import.meta.env.VITE_SPACE2_URL ?? 'https://your-user-coral-pipeline.hf.space';
 
-function pct(value: number): string {
-  return `${(value * 100).toFixed(1)}%`;
+// YOLO formatted text helper
+function generateYoloLabels(detections: any[], image_size: { width: number, height: number }) {
+  let output = "";
+  if (!image_size || !image_size.width || !image_size.height) return output;
+
+  for (const d of detections) {
+    // Class 0 = healthy, Class 1 = bleached
+    const clsId = d.label_short === 'bleached' ? 1 : 0;
+    const box = d.bbox;
+    const dw = 1.0 / image_size.width;
+    const dh = 1.0 / image_size.height;
+    const x_center = ((box.x1 + box.x2) / 2.0) * dw;
+    const y_center = ((box.y1 + box.y2) / 2.0) * dh;
+    const w = (box.x2 - box.x1) * dw;
+    const h = (box.y2 - box.y1) * dh;
+    output += `${clsId} ${x_center.toFixed(6)} ${y_center.toFixed(6)} ${w.toFixed(6)} ${h.toFixed(6)}\n`;
+  }
+  return output;
 }
 
-function detectionConfColor(confidence: number): string {
-  if (confidence >= 0.75) return "bg-emerald-500";
-  if (confidence >= 0.5) return "bg-yellow-500";
-  return "bg-red-500";
+interface UploadJob {
+  id: string;
+  file: File;
+  step: 'queued' | 'gps' | 'detecting' | 'saving' | 'done' | 'error';
+  gps: { lat: number; lon: number } | null;
+  health_score?: number;
+  stage?: string;
+  error?: string;
+  annotated_image?: string;
+  yolo_text?: string;
 }
 
-// ── Crop Card ─────────────────────────────────────────────────────────────────
-
-interface CropCardProps {
-  detection: CoralDetection;
-  index: number;
-  classification?: ClassificationResult;
-  classifying: boolean;
-  onZoom: (src: string, index: number) => void;
+function stepLabel(step: UploadJob['step']): string {
+  const labels: Record<UploadJob['step'], string> = {
+    queued: 'Queued',
+    gps: 'Extracting GPS…',
+    detecting: 'Analyzing pipeline…',
+    saving: 'Saving to DB…',
+    done: 'Done',
+    error: 'Error',
+  };
+  return labels[step];
 }
 
-function CropCard({
-  detection,
-  index,
-  classification,
-  classifying,
-  onZoom,
-}: CropCardProps) {
-  const src = `data:image/png;base64,${detection.crop_b64}`;
-  const detConf = detection.confidence;
-  const detColor = detectionConfColor(detConf);
-
-  const isHealthy = classification?.predicted_class === "healthy_corals";
-  const isBleached = classification?.predicted_class === "bleached_corals";
-
-  return (
-    <div
-      className={`group relative flex flex-col gap-2 rounded-xl border bg-card p-2 shadow-sm transition-all hover:shadow-md ${
-        isBleached
-          ? "border-red-400/50"
-          : isHealthy
-          ? "border-emerald-400/50"
-          : "border-muted hover:border-emerald-500/40"
-      }`}
-    >
-      {/* Crop image */}
-      <div className="relative overflow-hidden rounded-lg bg-muted aspect-square">
-        <img
-          src={src}
-          alt={`Coral detection ${index + 1}`}
-          className="h-full w-full object-cover"
-        />
-        {/* Classification overlay banner */}
-        {classification && (
-          <div
-            className={`absolute bottom-0 left-0 right-0 flex items-center gap-1 px-2 py-1 text-[10px] font-semibold text-white ${
-              isHealthy ? "bg-emerald-600/90" : "bg-red-600/90"
-            }`}
-          >
-            {isHealthy ? (
-              <HeartPulse className="h-3 w-3" />
-            ) : (
-              <ShieldAlert className="h-3 w-3" />
-            )}
-            {isHealthy ? "Healthy" : "Bleached"}
-          </div>
-        )}
-        {/* Classifying spinner */}
-        {classifying && !classification && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-            <Loader2 className="h-5 w-5 animate-spin text-white" />
-          </div>
-        )}
-        {/* Zoom overlay */}
-        <button
-          onClick={() => onZoom(src, index)}
-          className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover:bg-black/30 group-hover:opacity-100"
-          aria-label={`Zoom coral ${index + 1}`}
-        >
-          <ZoomIn className="h-6 w-6 text-white drop-shadow" />
-        </button>
-      </div>
-
-      {/* Meta */}
-      <div className="space-y-1 px-0.5">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold">Coral #{index + 1}</span>
-          {classification ? (
-            <Badge
-              className={`text-[10px] px-1.5 py-0 text-white ${
-                isHealthy ? "bg-emerald-500" : "bg-red-500"
-              }`}
-            >
-              {pct(classification.confidence)}
-            </Badge>
-          ) : (
-            <Badge
-              className={`${detColor} text-white text-[10px] px-1.5 py-0`}
-            >
-              {pct(detConf)}
-            </Badge>
-          )}
-        </div>
-
-        {/* Detection confidence bar */}
-        <div className="flex items-center gap-1">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
-            <div
-              className={`h-full rounded-full transition-all ${
-                classification
-                  ? isHealthy
-                    ? "bg-emerald-500"
-                    : "bg-red-500"
-                  : detColor
-              }`}
-              style={{
-                width: pct(classification?.confidence ?? detConf),
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Classification scores */}
-        {classification?.scores && (
-          <div className="space-y-0.5 pt-0.5">
-            {Object.entries(classification.scores).map(([cls, score]) => (
-              <div key={cls} className="flex items-center justify-between text-[9px] text-muted-foreground">
-                <span>{cls === "healthy_corals" ? "Healthy" : "Bleached"}</span>
-                <span className="font-mono">{pct(score)}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <p className="text-[10px] text-muted-foreground">
-          {Math.round(detection.bbox.x2 - detection.bbox.x1)} ×{" "}
-          {Math.round(detection.bbox.y2 - detection.bbox.y1)} px
-        </p>
-      </div>
-    </div>
-  );
+function stepPct(step: UploadJob['step']): number {
+  const pcts: Record<UploadJob['step'], number> = {
+    queued: 5,
+    gps: 15,
+    detecting: 50,
+    saving: 85,
+    done: 100,
+    error: 100,
+  };
+  return pcts[step];
 }
 
-// ── Main Component ────────────────────────────────────────────────────────────
-
-const CoralHealthDetector = () => {
-  const [conf, setConf] = useState(0.25);
-  const [iou, setIou] = useState(0.45);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [errorDismissed, setErrorDismissed] = useState(false);
-  const [zoomSrc, setZoomSrc] = useState<string | null>(null);
-  const [zoomIndex, setZoomIndex] = useState<number>(0);
-
+export default function CoralHealthDetector() {
+  const [jobs, setJobs] = useState<UploadJob[]>([]);
+  const [running, setRunning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
-  // ── Hooks ─────────────────────────────────────────────────────────────────
-  const { analyze, result, state, error, modelWarning, reset } =
-    useCoralDetection({ conf, iou });
-
-  const {
-    classify,
-    results: classResults,
-    state: classState,
-    error: classError,
-    reset: resetClass,
-  } = useCoralClassification();
-
-  const isProcessing =
-    state === "loading" || state === "uploading" || state === "cold-start";
-  const isClassifying = classState === "loading";
-
-  // ── Prepare a lookup map: detection index → classification result ──────────
-  const classMap = new Map<number, ClassificationResult>(
-    classResults.map((r) => [r.id, r])
-  );
-
-  // ── File handling ─────────────────────────────────────────────────────────
-  const applyFile = useCallback((file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    setSelectedFile(file);
-    setErrorDismissed(false);
-    setPreviewUrl(URL.createObjectURL(file));
+  const updateJob = useCallback((id: string, patch: Partial<UploadJob>) => {
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
   }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) applyFile(file);
+  const processFile = async (job: UploadJob) => {
+    try {
+      updateJob(job.id, { step: 'gps' });
+      const gps = await extractGPS(job.file);
+      updateJob(job.id, { gps });
+
+      updateJob(job.id, { step: 'detecting' });
+      const form = new FormData();
+      form.append('file', job.file);
+      // Default threshold, no UI sliders
+      const res = await fetch(`${SPACE2_URL}/analyze`, { method: 'POST', body: form });
+
+      if (!res.ok) {
+        throw new Error(`Pipeline error: ${res.status}`);
+      }
+      const pipelineResult = await res.json();
+
+      // labels for output
+      const yolo_text = generateYoloLabels(pipelineResult.detections || [], pipelineResult.summary?.image_size || { width: 640, height: 640 });
+
+      updateJob(job.id, { annotated_image: pipelineResult.annotated_image, yolo_text });
+
+      const avgScore: number = pipelineResult.summary?.avg_health_score ?? 50;
+      const dominantStage: string = pipelineResult.summary?.dominant_stage ?? 'Healthy';
+      const bleachConf: number = pipelineResult.detections?.[0]?.bleach_confidence ?? (1 - avgScore / 100);
+      const { health_score } = getSeverity(bleachConf, bleachConf > 0.5);
+
+      // Conditional DB save based on GPS existence
+      if (gps && isSupabaseConfigured) {
+        updateJob(job.id, { step: 'saving' });
+        const ocean = await fetchAllOceanData(gps.lat, gps.lon);
+        const threats = evaluateThreats({ health_score }, [], ocean);
+        const image_url = await uploadImageToCloudinary(job.file);
+
+        await saveSnapshot({
+          lat: gps.lat,
+          lon: gps.lon,
+          health_score,
+          bleach_stage: dominantStage,
+          bleach_confidence: bleachConf,
+          sst_celsius: ocean.sst,
+          ocean_ph: ocean.ph,
+          uv_index: ocean.uv,
+          dhw: ocean.dhw,
+          threats,
+          image_url,
+        });
+      }
+
+      updateJob(job.id, { step: 'done', health_score, stage: dominantStage });
+    } catch (e: any) {
+      updateJob(job.id, { step: 'error', error: e.message ?? 'Unknown error' });
+    }
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
+  const addFiles = (files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    const newJobs: UploadJob[] = images.map((f) => ({
+      id: Math.random().toString(36).slice(2),
+      file: f,
+      step: 'queued',
+      gps: null,
+    }));
+    setJobs((prev) => [...prev, ...newJobs]);
   };
-  const handleDragLeave = () => setIsDragging(false);
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) applyFile(file);
+    addFiles(Array.from(e.dataTransfer.files));
   };
 
-  const handleReset = () => {
-    reset();
-    resetClass();
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setErrorDismissed(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  const handleRun = async () => {
+    setRunning(true);
+    const pending = jobs.filter((j) => j.step === 'queued' || j.step === 'error');
+    // Processing sequentially to avoid overwhelming local RAM or pipeline max workers,
+    for (const job of pending) {
+      await processFile(job);
+    }
+    setRunning(false);
   };
 
-  const handleAnalyze = async () => {
-    if (!selectedFile) return;
-    setErrorDismissed(false);
-    resetClass();
-    await analyze(selectedFile);
+  const handleClear = () => {
+    if (!running) setJobs([]);
   };
 
-  const handleClassify = async () => {
-    if (!result || result.detections.length === 0) return;
-    await classify(
-      result.detections.map((d, i) => ({ id: i, crop_b64: d.crop_b64 }))
-    );
+  const done = jobs.filter((j) => j.step === 'done').length;
+  const errors = jobs.filter((j) => j.step === 'error').length;
+
+  const handleDownloadZip = async () => {
+    const zip = new JSZip();
+    const imgFolder = zip.folder('images');
+    const labelsFolder = zip.folder('labels');
+    if (!imgFolder || !labelsFolder) return;
+
+    jobs.forEach((job) => {
+      if (job.step === 'done' && job.annotated_image && job.yolo_text !== undefined) {
+        const b64Data = job.annotated_image.split(',')[1];
+        if (b64Data) {
+          const baseName = job.file.name.replace(/\.[^/.]+$/, "");
+          imgFolder.file(`annotated_${job.file.name}`, b64Data, { base64: true });
+          labelsFolder.file(`${baseName}.txt`, job.yolo_text);
+        }
+      }
+    });
+
+    // Add a class mapping file for reference
+    const refFolder = zip.folder('reference');
+    if (refFolder) {
+      refFolder.file('classes.txt', "0: healthy_corals\n1: bleached_corals");
+    }
+
+    const content = await zip.generateAsync({ type: 'blob' });
+    saveAs(content, 'coral_analysis_results.zip');
   };
 
-  // ── Derived stats ─────────────────────────────────────────────────────────
-  const avgConf =
-    result && result.detections.length > 0
-      ? result.detections.reduce((acc, d) => acc + d.confidence, 0) /
-        result.detections.length
-      : 0;
-
-  const healthyCount = classResults.filter(
-    (r) => r.predicted_class === "healthy_corals"
-  ).length;
-  const bleachedCount = classResults.filter(
-    (r) => r.predicted_class === "bleached_corals"
-  ).length;
-
-  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
-      {/* Model warning */}
-      {modelWarning && (
-        <Alert className="border-yellow-500/40 bg-yellow-500/10">
-          <AlertTriangle className="h-4 w-4 text-yellow-500" />
-          <AlertDescription className="text-yellow-700 dark:text-yellow-400">
-            {modelWarning}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* Detection error banner */}
-      {state === "error" && error && !errorDismissed && (
-        <Alert className="border-red-500/40 bg-red-500/10">
-          <AlertTriangle className="h-4 w-4 text-red-500" />
-          <AlertDescription className="flex items-center justify-between gap-4">
-            <span className="text-red-700 dark:text-red-400">{error}</span>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0"
-              onClick={() => setErrorDismissed(true)}
-              aria-label="Dismiss error"
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* Classification error banner */}
-      {classState === "error" && classError && (
-        <Alert className="border-red-500/40 bg-red-500/10">
-          <AlertTriangle className="h-4 w-4 text-red-500" />
-          <AlertDescription className="text-red-700 dark:text-red-400">
-            Classification error: {classError}
-          </AlertDescription>
-        </Alert>
-      )}
-
       <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
-        {/* ── Left: upload + controls ─────────────────────────────────────── */}
+        {/* ── Left: upload + controls ── */}
         <div className="space-y-4">
-          {/* Upload zone */}
           <Card className="border-2">
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Upload Image</CardTitle>
+              <CardTitle className="text-base flex items-center gap-2">
+                <Upload className="h-4 w-4" /> Upload Images or Folder
+              </CardTitle>
               <CardDescription>
-                Drag &amp; drop or click to select · JPG, PNG, WEBP
+                Drag &amp; drop files/folders here. If images contain GPS they will be automatically saved to the database.
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
+                onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
-                onClick={() => !isProcessing && fileInputRef.current?.click()}
-                className={`relative cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-all duration-300 ${
-                  isDragging
-                    ? "border-primary bg-primary/5 scale-[1.02]"
-                    : "border-muted-foreground/25 hover:border-emerald-500/60 hover:bg-emerald-500/5"
-                } ${isProcessing ? "pointer-events-none opacity-60" : ""}`}
+                onClick={() => folderInputRef.current?.click()}
+                className={`cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all ${isDragging
+                  ? 'border-primary bg-primary/5 scale-[1.01]'
+                  : 'border-muted-foreground/25 hover:border-emerald-500/60 hover:bg-emerald-500/5'
+                  }`}
               >
-                {previewUrl ? (
-                  <img
-                    src={previewUrl}
-                    alt="Selected preview"
-                    className="mx-auto max-h-64 rounded-lg object-contain shadow"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center gap-3 py-6">
-                    <Upload className="h-12 w-12 text-muted-foreground" />
-                    <div>
-                      <p className="font-semibold">Drop image here</p>
-                      <p className="text-sm text-muted-foreground">
-                        or click to browse
-                      </p>
-                    </div>
-                  </div>
-                )}
+                <Upload className="mx-auto h-10 w-10 mb-2 text-muted-foreground" />
+                <p className="font-semibold">Drop images or folders here</p>
+                <p className="text-sm text-muted-foreground">or click to browse</p>
               </div>
+
+              {/* Hidden inputs */}
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/*"
+                multiple
                 className="hidden"
-                onChange={handleFileChange}
+                onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
               />
-              {selectedFile && (
-                <p className="mt-2 truncate text-center text-xs text-muted-foreground">
-                  {selectedFile.name}
-                </p>
-              )}
-            </CardContent>
-          </Card>
+              {/* Input for folder select */}
+              <input
+                ref={folderInputRef}
+                type="file"
+                accept="image/*"
+                // @ts-expect-error webkitdirectory is non-standard but widely supported
+                webkitdirectory="true"
+                directory=""
+                multiple
+                className="hidden"
+                onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
+              />
 
-          {/* Threshold controls */}
-          <Card className="border-2">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base">Detection Thresholds</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6 pt-2">
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="font-medium">Confidence</span>
-                  <Badge variant="secondary">{conf.toFixed(2)}</Badge>
-                </div>
-                <Slider
-                  min={0.1}
-                  max={0.9}
-                  step={0.05}
-                  value={[conf]}
-                  onValueChange={([v]) => setConf(v)}
-                  disabled={isProcessing}
-                  className="[&_[role=slider]]:bg-emerald-500"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Permissive (0.1)</span>
-                  <span>Strict (0.9)</span>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="font-medium">IOU (overlap)</span>
-                  <Badge variant="secondary">{iou.toFixed(2)}</Badge>
-                </div>
-                <Slider
-                  min={0.1}
-                  max={0.9}
-                  step={0.05}
-                  value={[iou]}
-                  onValueChange={([v]) => setIou(v)}
-                  disabled={isProcessing}
-                  className="[&_[role=slider]]:bg-emerald-500"
-                />
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Allow overlap (0.1)</span>
-                  <span>Strict NMS (0.9)</span>
-                </div>
+              <div className="flex gap-2 mt-4 justify-center">
+                <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                  Select Files
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => folderInputRef.current?.click()}>
+                  Select Folder
+                </Button>
               </div>
             </CardContent>
           </Card>
 
-          {/* Actions */}
           <div className="flex gap-3">
-            <Button
-              className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-semibold"
-              disabled={!selectedFile || isProcessing}
-              onClick={handleAnalyze}
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {state === "cold-start" ? "Model waking up…" : "Detecting…"}
-                </>
-              ) : (
-                <>
-                  <Waves className="mr-2 h-4 w-4" />
-                  Detect Corals
-                </>
-              )}
-            </Button>
-            <Button
-              variant="outline"
-              disabled={isProcessing || isClassifying}
-              onClick={handleReset}
-            >
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-          </div>
-
-          {/* Cold-start alert */}
-          {state === "cold-start" && (
-            <Alert className="border-blue-500/40 bg-blue-500/10">
-              <Clock className="h-4 w-4 text-blue-500" />
-              <AlertDescription className="text-blue-700 dark:text-blue-400">
-                Model is waking up — this may take 30–60 s on first use. Please
-                wait…
-              </AlertDescription>
-            </Alert>
-          )}
-
-          {/* Classify Health button — shown after successful detection */}
-          {state === "success" &&
-            result &&
-            result.detections.length > 0 &&
-            classState === "idle" && (
+            {jobs.filter((j) => j.step === 'queued' || j.step === 'error').length > 0 && (
               <Button
-                className="w-full bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white font-semibold"
-                onClick={handleClassify}
+                className="flex-1 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-semibold"
+                onClick={handleRun}
+                disabled={running}
               >
-                <HeartPulse className="mr-2 h-4 w-4" />
-                Classify Health (bleached / healthy)
+                {running ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing {jobs.filter(j => j.step === 'queued').length} items…</>
+                ) : (
+                  <><Waves className="mr-2 h-4 w-4" /> Check Coral Health ({jobs.filter((j) => j.step === 'queued').length})</>
+                )}
               </Button>
             )}
-
-          {isClassifying && (
-            <Alert className="border-pink-500/40 bg-pink-500/10">
-              <Loader2 className="h-4 w-4 animate-spin text-pink-500" />
-              <AlertDescription className="text-pink-700 dark:text-pink-400">
-                Running ResNet-50 classification on {result?.detections.length}{" "}
-                coral crop{result?.detections.length !== 1 ? "s" : ""}…
-              </AlertDescription>
-            </Alert>
-          )}
+            {jobs.length > 0 && !running && (
+              <Button variant="outline" onClick={handleClear}>
+                Clear List
+              </Button>
+            )}
+          </div>
         </div>
 
-        {/* ── Right: results ───────────────────────────────────────────────── */}
+        {/* ── Right: results/job list ── */}
         <div className="space-y-4">
-          {state === "success" && result ? (
-            <>
-              {/* Stats summary */}
-              <Card className="border-2 border-emerald-500/30">
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                    Analysis Complete
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {classState === "success" && classResults.length > 0 ? (
-                    /* Classification summary */
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-emerald-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-emerald-500">
-                          {healthyCount}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Healthy
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-red-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-red-500">
-                          {bleachedCount}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Bleached
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-teal-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-teal-500">
-                          {result.detections.length}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Total
-                        </p>
-                      </div>
-                    </div>
-                  ) : (
-                    /* Detection summary */
-                    <div className="grid grid-cols-3 gap-3">
-                      <div className="rounded-lg bg-emerald-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-emerald-500">
-                          {result.detections.length}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Corals Found
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-teal-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-teal-500">
-                          {pct(avgConf)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Avg Confidence
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-blue-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-blue-500">
-                          {result.image_size.width}×{result.image_size.height}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Image (px)
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Health bar (only after classification) */}
-              {classState === "success" && classResults.length > 0 && (
-                <div className="flex overflow-hidden rounded-full h-3">
-                  <div
-                    className="bg-emerald-500 transition-all"
-                    style={{
-                      width: `${(healthyCount / classResults.length) * 100}%`,
-                    }}
-                    title={`${healthyCount} healthy`}
-                  />
-                  <div
-                    className="bg-red-500 transition-all"
-                    style={{
-                      width: `${(bleachedCount / classResults.length) * 100}%`,
-                    }}
-                    title={`${bleachedCount} bleached`}
-                  />
+          <Card className="border-2 h-full min-h-[400px]">
+            <CardHeader className="pb-3 border-b">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base">Analysis Progress</CardTitle>
+                  <CardDescription>
+                    Files loaded: {jobs.length} | Done: {done}
+                  </CardDescription>
                 </div>
-              )}
+                {!running && done > 0 && (
+                  <Button
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                    onClick={handleDownloadZip}
+                  >
+                    <DownloadCloud className="w-4 h-4 mr-2" />
+                    Download ZIP (Images + Labels)
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {jobs.length > 0 ? (
+                <div className="divide-y max-h-[500px] overflow-y-auto">
+                  {jobs.map((job) => (
+                    <div key={job.id} className="p-4 flex flex-col gap-2 hover:bg-muted/30">
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0 pr-4">
+                          <p className="text-sm font-medium truncate" title={job.file.webkitRelativePath || job.file.name}>
+                            {job.file.webkitRelativePath || job.file.name}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            {job.gps ? (
+                              <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50">GPS Found (Saving to DB)</Badge>
+                            ) : job.step === 'done' || job.step === 'saving' || job.step === 'detecting' ? (
+                              <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200 bg-amber-50">No GPS (Skip DB)</Badge>
+                            ) : null}
+                            <span className="text-[11px] text-muted-foreground">
+                              {job.step === 'error' ? `❌ ${job.error}` : stepLabel(job.step)}
+                            </span>
+                          </div>
+                        </div>
 
-              {/* Original image */}
-              <Card className="border-2">
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Original Image</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <img
-                    src={`data:image/png;base64,${result.original_image_b64}`}
-                    alt="Original uploaded image"
-                    className="mx-auto max-h-56 w-full rounded-lg object-contain shadow"
-                  />
-                </CardContent>
-              </Card>
-
-              {/* Coral crops grid */}
-              {result.detections.length > 0 ? (
-                <Card className="border-2">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">
-                      Detected Corals ({result.detections.length})
-                    </CardTitle>
-                    <CardDescription>
-                      {classState === "success"
-                        ? "Green border = healthy · Red border = bleached"
-                        : <>Click any crop to zoom · Use <strong>Classify Health</strong> to analyse each coral</>}
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <ScrollArea className="h-72 px-4">
-                      <div className="grid grid-cols-3 gap-3 py-3">
-                        {result.detections.map((d, i) => (
-                          <CropCard
-                            key={i}
-                            detection={d}
-                            index={i}
-                            classification={classMap.get(i)}
-                            classifying={isClassifying}
-                            onZoom={(src, idx) => {
-                              setZoomSrc(src);
-                              setZoomIndex(idx);
-                            }}
-                          />
-                        ))}
+                        <div className="flex gap-2 items-center">
+                          {job.step === 'done' && job.health_score != null && (
+                            <SeverityBadge
+                              healthScore={job.health_score}
+                              stage={(job.stage ?? 'Healthy') as BleachStage}
+                              size="sm"
+                              showScore
+                            />
+                          )}
+                          {(job.step === 'detecting' || job.step === 'saving' || job.step === 'gps') && (
+                            <Loader2 className="h-4 w-4 animate-spin text-emerald-500 shrink-0" />
+                          )}
+                          {job.step === 'done' && <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />}
+                          <button
+                            className="text-muted-foreground hover:text-red-500 transition-colors ml-1"
+                            onClick={() => setJobs((prev) => prev.filter((j) => j.id !== job.id))}
+                            title="Remove from list"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
                       </div>
-                    </ScrollArea>
-                  </CardContent>
-                </Card>
-              ) : (
-                <Alert className="border-yellow-500/40 bg-yellow-500/10">
-                  <AlertTriangle className="h-4 w-4 text-yellow-500" />
-                  <AlertDescription className="text-yellow-700 dark:text-yellow-400">
-                    No coral detected at the current thresholds. Try lowering
-                    the confidence threshold.
-                  </AlertDescription>
-                </Alert>
-              )}
-            </>
-          ) : (
-            /* Idle / loading placeholder */
-            <div className="flex h-full min-h-[300px] flex-col items-center justify-center rounded-xl border-2 border-dashed border-muted-foreground/20 text-muted-foreground">
-              {isProcessing ? (
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-10 w-10 animate-spin text-emerald-500" />
-                  <p className="text-sm font-medium">
-                    {state === "cold-start"
-                      ? "Model waking up, please wait…"
-                      : "Detecting corals…"}
-                  </p>
+                      <Progress
+                        value={stepPct(job.step)}
+                        className={`h-1.5 ${job.step === 'error' ? '[&>div]:bg-red-500' : '[&>div]:bg-emerald-500'}`}
+                      />
+                    </div>
+                  ))}
                 </div>
               ) : (
-                <div className="flex flex-col items-center gap-3 p-8 text-center">
-                  <Waves className="h-12 w-12 opacity-30" />
+                <div className="flex flex-col items-center justify-center h-64 text-muted-foreground p-8 text-center">
+                  <Waves className="h-12 w-12 opacity-20 mb-4" />
                   <p className="text-sm">
-                    Upload an image and click{" "}
-                    <strong>Detect Corals</strong> to see results here.
+                    Upload single or bulk coral images to analyze them.
                   </p>
                 </div>
               )}
-            </div>
-          )}
+            </CardContent>
+          </Card>
         </div>
       </div>
-
-      {/* Zoom dialog */}
-      <Dialog
-        open={zoomSrc !== null}
-        onOpenChange={(open) => !open && setZoomSrc(null)}
-      >
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>
-              Coral #{zoomIndex + 1}
-              {classMap.get(zoomIndex) && (
-                <Badge
-                  className={`ml-2 text-white ${
-                    classMap.get(zoomIndex)?.predicted_class ===
-                    "healthy_corals"
-                      ? "bg-emerald-500"
-                      : "bg-red-500"
-                  }`}
-                >
-                  {classMap.get(zoomIndex)?.predicted_class === "healthy_corals"
-                    ? "Healthy"
-                    : "Bleached"}{" "}
-                  · {pct(classMap.get(zoomIndex)?.confidence ?? 0)}
-                </Badge>
-              )}
-            </DialogTitle>
-          </DialogHeader>
-          {zoomSrc && (
-            <img
-              src={zoomSrc}
-              alt={`Zoomed coral ${zoomIndex + 1}`}
-              className="w-full rounded-lg object-contain"
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
-};
-
-export default CoralHealthDetector;
+}
