@@ -1,0 +1,380 @@
+# ============================================================================
+# REEF INTELLIGENCE PLATFORM (CoralWatch) — Complete Project Report
+# ============================================================================
+#
+# AI-powered platform for monitoring coral reef health and marine debris,
+# combining computer vision (YOLOv11 + ResNet-50), real-time oceanographic
+# data, and a rule-based threat engine to deliver actionable conservation
+# insights to researchers and NGOs.
+#
+# Tech Stack: React 18 · Vite · TypeScript · Tailwind CSS · shadcn/ui
+#             Supabase (PostGIS) · Cloudinary · Hugging Face Spaces (FastAPI)
+#             Recharts · Leaflet · JSZip
+# ============================================================================
+
+
+================================================================================
+ 1. FRONTEND FEATURES (React + Vite + TypeScript)
+================================================================================
+
+─────────────────────────────────────────────────────────────────────────────────
+ 1.1  Coral Health Check  (CoralHealth.tsx → CoralHealthDetector.tsx)
+─────────────────────────────────────────────────────────────────────────────────
+PURPOSE   Upload a single underwater image and detect + classify every coral.
+HOW       1. User uploads an image.
+          2. Image is sent to Space 1 (YOLOv11) which returns bounding boxes
+             and cropped coral images.
+          3. Each crop is sent to Space 3 (ResNet-50) which classifies it as
+             "healthy_corals" or "bleached_corals" with a confidence score.
+          4. The UI overlays colored bounding boxes (green=healthy, red=bleached)
+             and displays per-coral health cards with confidence percentages.
+RESULT    Visual annotated image + per-coral health breakdown + overall summary.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+ 1.2  Marine Debris Detection  (DetectDebris.tsx → MarineDebrisDetector.tsx)
+─────────────────────────────────────────────────────────────────────────────────
+PURPOSE   Detect and classify marine debris in underwater images.
+HOW       1. User uploads an image and adjusts confidence/IoU thresholds.
+          2. Image is sent to a specialized YOLOv11 debris model on HF Spaces.
+          3. Returns annotated image with bounding boxes and a breakdown by
+             debris class (plastic_bottle, fishing_net, foam, rope, etc.).
+          4. User can adjust thresholds with sliders and re-detect.
+DB SAVE   After detection, a "Save to Database" card appears with:
+          - Auto-extracted GPS from EXIF (or manual entry fields)
+          - Save button that stores the event in the `debris_events` table
+            in Supabase (lat, lon, total_debris, by_class, avg_confidence,
+            annotated image, timestamp).
+RESULT    Annotated image + class breakdown + persistent DB storage.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+ 1.3  Reef Dashboard  (ReefDashboard.tsx)
+─────────────────────────────────────────────────────────────────────────────────
+PURPOSE   Central hub for all reef monitoring, analysis, and data upload.
+TABS      4 tabs available:
+
+  TAB 1 — HEATMAP (ReefHeatmap.tsx)
+    • Interactive Leaflet map with color-coded circle markers per reef.
+    • Colors: green (healthy) → yellow → orange → red → black (critical).
+    • Clicking a circle shows a popup with health score, bleach stage,
+      and a link to the full reef detail page.
+    • Markers are also clickable from the Data Analysis tab (see 1.5).
+
+  TAB 2 — REEF LIST
+    • Scrollable list of all monitored reef sites.
+    • Each entry shows reef name, health score badge, and bleach stage.
+    • Clicking a row navigates to the full Reef Detail page.
+
+  TAB 3 — BULK UPLOAD (BulkUploadPanel.tsx)  — see section 1.4
+
+  TAB 4 — DATA ANALYSIS (AnalysisPanel.tsx)  — see section 1.5
+
+
+─────────────────────────────────────────────────────────────────────────────────
+ 1.4  Bulk Upload & Pipeline Analysis  (BulkUploadPanel.tsx)
+─────────────────────────────────────────────────────────────────────────────────
+PURPOSE   Upload multiple coral images at once, run the full AI pipeline on
+          each, and persist results to the cloud and database.
+FEATURES  
+  • Drag-and-drop or file browser for multi-image upload.
+  • Per-image progress indicator with step labels:
+      "Extracting GPS…" → "YOLO detecting…" → "ResNet classifying…" → "Saving to DB…" → "Done"
+  • Progress bar per image with color coding (green = success, red = error).
+  • GPS extraction from EXIF metadata.
+  • ⭐ MANUAL GPS FALLBACK: If an image has no EXIF GPS data, a small inline
+    form (lat/lon inputs + "Set GPS" button) appears per-image instead of
+    failing. The user enters coordinates and the pipeline continues.
+  • Summary banner showing total images, saved count, error count.
+
+PIPELINE (per image):
+  Step 1 — Extract GPS from EXIF (or wait for manual entry)
+  Step 2 — Find or create a reef zone in Supabase (PostGIS nearest-neighbor)
+  Step 3 — Send image to Space 2 Pipeline Orchestrator (YOLO + ResNet)
+  Step 4 — Fetch real-time ocean data (SST, UV, pH, DHW) via Ocean APIs
+  Step 5 — Calculate health score and bleach stage (severity.ts)
+  Step 6 — Run multi-factor threat engine (threat-engine.ts)
+  Step 7 — Upload annotated image to Cloudinary
+  Step 8 — Save full snapshot to Supabase (reef_snapshots table)
+
+OUTPUT:
+  • "Download All Results (ZIP)" button appears after completion.
+  • Uses JSZip to package all AI-annotated output images into a single
+    downloadable ZIP file (coral_analysis_results.zip).
+
+
+─────────────────────────────────────────────────────────────────────────────────
+ 1.5  Data Analysis & Coordinate Search  (AnalysisPanel.tsx)
+─────────────────────────────────────────────────────────────────────────────────
+PURPOSE   Provide database-wide insights and let users search for a specific
+          reef by entering GPS coordinates or clicking the heatmap.
+
+FEATURES:
+  SECTION 1 — Overall Database Insights
+    • Total Reef Sites monitored
+    • Average Health Score across all reefs
+    • Number of Healthy sites (score ≥ 80)
+    • Number of Critical sites (score < 25)
+
+  SECTION 2 — Interactive Heatmap
+    • Embedded ReefHeatmap component.
+    • ⭐ Clicking any reef circle auto-fills the lat/lon fields AND
+      instantly loads the Reef Detail Panel below — no manual typing needed.
+
+  SECTION 3 — Manual Coordinate Search
+    • Lat/Lon input fields + "Extract Details" button.
+    • Queries Supabase PostGIS (find_nearest_reef) within 2km radius.
+    • Shows "No reef found" message if nothing is within range.
+
+  SECTION 4 — Reef Detail Panel (inline)
+    • When a reef is found, the full ReefDetailPanel renders inline,
+      showing all the information described in section 1.6 below.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+ 1.6  Reef Detail Panel  (ReefDetailPanel.tsx)
+─────────────────────────────────────────────────────────────────────────────────
+PURPOSE   Comprehensive dashboard for a single reef site, showing health
+          history, environmental data, threats, recovery trends, and images.
+
+SECTIONS:
+  ① HEADER CARD
+     • Reef name, GPS coordinates, last-updated timestamp.
+     • Health Score severity badge (color-coded).
+     • ⭐ NOAA Bleaching Alert Level badge (Level 0–4):
+         Level 0: No Stress       (DHW < 0)    — green
+         Level 1: Bleaching Watch  (DHW 0–4)    — yellow
+         Level 2: Bleaching Warning (DHW 4–8)   — orange
+         Level 3: Alert Level 1    (DHW 8–12)   — red
+         Level 4: Alert Level 2    (DHW ≥ 12)   — black
+     • Stats: Total Surveys | Health Score | Active Threats count.
+
+  ② RECOVERY RATE CARD  (recovery.ts)
+     • ⭐ Calculates recovery from the bleaching nadir (lowest score).
+     • Shows "+X pts/week" with nadir score, current score, weeks elapsed,
+       and nadir date.
+     • Only appears when positive recovery trend is detected.
+     • Gives NGOs a concrete metric for reef resilience.
+
+  ③ ACTIVE THREATS
+     • Color-coded threat badges from the multi-factor threat engine.
+     • Threat types: THERMAL, ACIDIFICATION, RAPID_DECLINE, COMPOUND,
+       UV_AMPLIFICATION, NO_DATA.
+     • Severities: CRITICAL → HIGH → MEDIUM → WATCH → LOW → INFO.
+
+  ④ WATER QUALITY CARD (WaterQualityCard.tsx)
+     • SST (°C), pH, UV Index, DHW values from the latest snapshot.
+
+  ⑤ HEALTH TIMELINE CHART (ReefTimeline.tsx)
+     • Recharts ComposedChart showing Health Score (left Y axis),
+       SST (right Y axis), and DHW (shaded area) over time.
+     • NOAA bleach threshold reference line on SST axis.
+     • Healthy score reference line on health score axis.
+     • Interactive tooltips with all values.
+
+  ⑥ BEFORE / AFTER IMAGE COMPARISON
+     • ⭐ Side-by-side display: worst-score image vs most-recent image.
+     • Each side shows health score badge + date label.
+     • Only appears when there are ≥2 snapshots with images.
+     • Helps researchers visually track reef degradation or recovery.
+
+  ⑦ LATEST IMAGE
+     • Shown when there is no before/after comparison (only 1 image).
+
+
+================================================================================
+ 2. BACKEND / AI ML MODELS  (Hugging Face Spaces)
+================================================================================
+
+Three separate Hugging Face Spaces keep models isolated and performant:
+
+─────────────────────────────────────────────────────────────────────────────────
+ 2.1  Space 1 — Coral Detection  (YOLOv11)
+─────────────────────────────────────────────────────────────────────────────────
+ENDPOINT  POST /detect
+INPUT     Underwater image (multipart form)
+OUTPUT    • Original image dimensions
+          • Array of bounding boxes (x1, y1, x2, y2, confidence, class)
+          • Base64 crops of each detected coral
+MODEL     YOLOv11 fine-tuned on coral reef imagery
+
+
+─────────────────────────────────────────────────────────────────────────────────
+ 2.2  Space 3 — Coral Classification  (ResNet-50)
+─────────────────────────────────────────────────────────────────────────────────
+ENDPOINT  POST /classify
+INPUT     Base64 cropped coral images
+OUTPUT    • Classification: "healthy_corals" or "bleached_corals"
+          • Confidence probability (0.0–1.0)
+MODEL     ResNet-50 with Test Time Augmentation (TTA) — flips + rotations
+          for robust predictions without retraining.
+
+
+─────────────────────────────────────────────────────────────────────────────────
+ 2.3  Space 2 — Pipeline Orchestrator
+─────────────────────────────────────────────────────────────────────────────────
+ENDPOINT  POST /analyze
+INPUT     Single underwater image
+PROCESS   1. Calls Space 1 → gets coral bounding boxes + crops.
+          2. Calls Space 3 → classifies each crop.
+          3. Uses OpenCV to draw annotated bounding boxes on the original image
+             (Green = Healthy, Red = Bleached).
+          4. Calculates summary statistics:
+             - Total corals detected
+             - Average health score
+             - Dominant bleach stage
+             - Healthy vs bleached count
+OUTPUT    • Fully annotated base64 image
+          • Per-detection array with classification results
+          • Summary statistics object
+
+
+================================================================================
+ 3. CORE LIBRARIES & ENGINES
+================================================================================
+
+─────────────────────────────────────────────────────────────────────────────────
+ 3.1  Severity Engine  (severity.ts)
+─────────────────────────────────────────────────────────────────────────────────
+Converts ResNet bleach_confidence → health score (0–100) + bleach stage:
+  • Healthy           (score 75–100)
+  • Early Thermal Stress (score 55–84)
+  • Partial Bleaching  (score 30–54)
+  • Severe Bleaching   (score 10–29)
+  • Critical / Mortality Risk (score 0–9)
+
+─────────────────────────────────────────────────────────────────────────────────
+ 3.2  Multi-Factor Threat Engine  (threat-engine.ts)
+─────────────────────────────────────────────────────────────────────────────────
+Pure rule-based engine — no ML. Every HIGH/CRITICAL threat requires ≥2
+corroborating signals to avoid false alarms.
+
+THREAT TYPES:
+  • THERMAL       — SST + DHW combined (4 severity levels)
+  • ACIDIFICATION — pH thresholds, escalates if reef already weak
+  • RAPID_DECLINE — Health score drop between surveys (3 levels)
+  • COMPOUND      — Multiple concurrent stressors (3–5 active)
+  • UV_AMPLIFICATION — UV + SST combined amplification
+  • NO_DATA       — Days since last survey (stale/blind warnings)
+
+─────────────────────────────────────────────────────────────────────────────────
+ 3.3  Recovery Rate Calculator  (recovery.ts)
+─────────────────────────────────────────────────────────────────────────────────
+Calculates recovery trend after a bleaching event:
+  1. Finds the nadir (lowest health score) in the reef's history.
+  2. Computes points gained per week from nadir to latest snapshot.
+  3. Returns: recoveryRate, nadirDate, nadirScore, currentScore, weeksElapsed.
+  4. Only reports positive recovery (improvement).
+
+─────────────────────────────────────────────────────────────────────────────────
+ 3.4  Ocean APIs  (ocean-apis.ts)
+─────────────────────────────────────────────────────────────────────────────────
+Fetches real-time environmental data from free APIs:
+  • SST  — NOAA Coral Reef Watch via ERDDAP (5km grid)
+  • UV   — OpenUV API (requires free API key in env vars)
+  • pH   — Hardcoded at 8.05 (global ocean average; original NOAA dataset
+            is no longer available)
+  • DHW  — NOAA Coral Reef Watch Degree Heating Weeks
+
+─────────────────────────────────────────────────────────────────────────────────
+ 3.5  EXIF GPS Extraction  (exif.ts)
+─────────────────────────────────────────────────────────────────────────────────
+Uses the `exifr` library to extract GPS latitude/longitude from uploaded
+image EXIF metadata. Returns null if no GPS data is found, triggering the
+manual GPS fallback UI in BulkUploadPanel.
+
+
+================================================================================
+ 4. INTEGRATIONS & INFRASTRUCTURE
+================================================================================
+
+─────────────────────────────────────────────────────────────────────────────────
+ 4.1  Supabase  (PostgreSQL + PostGIS)
+─────────────────────────────────────────────────────────────────────────────────
+TABLES:
+  • reefs            — Reef sites with PostGIS geography point
+  • reef_snapshots   — Per-upload analysis results (health, env data, threats,
+                       image URL, GPS, auto-timestamp)
+  • debris_events    — Marine debris detection events (GPS, class counts,
+                       confidence, annotated image, timestamp)
+
+FUNCTIONS:
+  • find_nearest_reef(lat, lon, radius_m)
+    PostGIS spatial query — finds the nearest reef within a radius.
+    Used to auto-group uploads to existing reef zones.
+
+RLS:
+  • All tables have Row Level Security enabled with open policies
+    for the anon key (suitable for hackathon; tighten for production).
+
+─────────────────────────────────────────────────────────────────────────────────
+ 4.2  Cloudinary
+─────────────────────────────────────────────────────────────────────────────────
+  • Stores annotated output images permanently.
+  • Uses an unsigned upload preset ("reef_uploads").
+  • Returns secure_url which is saved in the reef_snapshots table.
+
+─────────────────────────────────────────────────────────────────────────────────
+ 4.3  Environment Variables Required  (.env.local)
+─────────────────────────────────────────────────────────────────────────────────
+  VITE_SUPABASE_URL=<your-supabase-url>
+  VITE_SUPABASE_ANON_KEY=<your-supabase-anon-key>
+  VITE_CLOUDINARY_CLOUD_NAME=<your-cloudinary-cloud-name>
+  VITE_SPACE2_URL=<your-hf-space2-url>
+  VITE_OPENUV_API_KEY=<your-openuv-api-key>
+
+
+================================================================================
+ 5. DATABASE SCHEMA  (supabase.sql)
+================================================================================
+
+The complete SQL schema is provided in `supabase.sql` at the project root.
+It includes:
+  1. PostGIS extension
+  2. reefs table
+  3. reef_snapshots table
+  4. debris_events table
+  5. find_nearest_reef() PostGIS function
+  6. Row Level Security policies
+
+The schema is idempotent (safe to run multiple times).
+
+
+================================================================================
+ 6. PROJECT STRUCTURE
+================================================================================
+
+src/
+├── components/
+│   ├── AnalysisPanel.tsx        — Data Analysis tab (insights + coord search)
+│   ├── BulkUploadPanel.tsx      — Bulk upload with GPS fallback + ZIP download
+│   ├── CoralHealthDetector.tsx   — Single-image coral detection + classification
+│   ├── MarineDebrisDetector.tsx  — Debris detection + DB save
+│   ├── ReefDetailPanel.tsx      — Full reef detail (alerts, recovery, comparison)
+│   ├── ReefHeatmap.tsx          — Leaflet map with clickable reef circles
+│   ├── ReefTimeline.tsx         — Recharts health timeline chart
+│   ├── SeverityBadge.tsx        — Color-coded health stage badge
+│   ├── ThreatBadges.tsx         — Threat severity badges
+│   └── WaterQualityCard.tsx     — SST/pH/UV/DHW display card
+├── hooks/
+│   └── use-marine-debris.ts     — Custom hook for debris detection API
+├── lib/
+│   ├── constants.ts             — Thresholds, stage configs, severity order
+│   ├── cloudinary.ts            — Cloudinary unsigned upload
+│   ├── db.ts                    — Supabase CRUD (reefs, snapshots, debris)
+│   ├── exif.ts                  — EXIF GPS extraction
+│   ├── ocean-apis.ts            — SST, UV, pH, DHW fetch functions
+│   ├── recovery.ts              — Recovery rate calculator
+│   ├── severity.ts              — Bleach confidence → health score mapper
+│   ├── supabase.ts              — Supabase client initialization
+│   ├── threat-engine.ts         — Multi-factor threat evaluation
+│   └── marine-debris/
+│       ├── api.ts               — Debris detection API fetch layer
+│       └── types.ts             — TypeScript types for debris detection
+├── pages/
+│   ├── CoralHealth.tsx          — Coral Health Check page
+│   ├── DetectDebris.tsx         — Marine Debris Detection page
+│   ├── Index.tsx                — Landing page
+│   ├── ReefDashboard.tsx        — Main dashboard (4 tabs)
+│   └── ReefDetail.tsx           — Individual reef detail page
+└── App.tsx                      — React Router configuration

@@ -1,0 +1,209 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CoralWatch Design System - Marine & Coral Inspired Theme
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Ocean depths and coral reef colors */
+    --background: 210 100% 98%;
+    --foreground: 215 25% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 15%;
+
+    /* Deep ocean blue as primary */
+    --primary: 215 85% 25%;
+    --primary-foreground: 0 0% 98%;
+
+    /* Coral pink secondary */
+    --secondary: 345 85% 85%;
+    --secondary-foreground: 215 85% 25%;
+
+    /* Soft teal muted */
+    --muted: 180 25% 94%;
+    --muted-foreground: 180 10% 45%;
+
+    /* Vibrant turquoise accent */
+    --accent: 180 85% 65%;
+    --coral: 345 85% 75%;
+    --accent-foreground: 215 85% 25%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 180 25% 88%;
+    --input: 180 25% 94%;
+    --ring: 180 85% 65%;
+
+    --radius: 1rem;
+
+    /* Ocean gradients */
+    --gradient-ocean: linear-gradient(135deg, hsl(215 85% 35%), hsl(180 85% 45%));
+    --gradient-coral: linear-gradient(135deg, hsl(345 85% 75%), hsl(25 85% 75%));
+    --gradient-deep: linear-gradient(180deg, hsl(215 85% 25%), hsl(215 85% 15%));
+    --gradient-surface: linear-gradient(180deg, hsl(180 85% 85%), hsl(180 85% 95%));
+
+    /* Shadows with ocean depth */
+    --shadow-ocean: 0 20px 40px -10px hsl(215 85% 25% / 0.3);
+    --shadow-coral: 0 10px 30px -5px hsl(345 85% 75% / 0.4);
+    --shadow-soft: 0 4px 20px -2px hsl(180 85% 65% / 0.2);
+
+    /* Animations */
+    --wave-duration: 3s;
+    --float-duration: 6s;
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 212.7 26.8% 83.9%;
+    --sidebar-background: 240 5.9% 10%;
+    --sidebar-foreground: 240 4.8% 95.9%;
+    --sidebar-primary: 224.3 76.3% 48%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 240 3.7% 15.9%;
+    --sidebar-accent-foreground: 240 4.8% 95.9%;
+    --sidebar-border: 240 3.7% 15.9%;
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@layer components {
+  /* Ocean wave animation */
+  @keyframes wave {
+    0%, 100% { transform: translateX(0) translateY(0) rotate(0deg); }
+    25% { transform: translateX(5px) translateY(-5px) rotate(1deg); }
+    50% { transform: translateX(-5px) translateY(-10px) rotate(-1deg); }
+    75% { transform: translateX(-5px) translateY(-5px) rotate(1deg); }
+  }
+
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-20px); }
+  }
+
+  @keyframes bubble-rise {
+    0% { transform: translateY(100vh) scale(0); opacity: 0; }
+    10% { opacity: 1; }
+    90% { opacity: 1; }
+    100% { transform: translateY(-100px) scale(1); opacity: 0; }
+  }
+
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+
+  /* Ocean themed utility classes */
+  .gradient-ocean {
+    background: var(--gradient-ocean);
+  }
+
+  .gradient-coral {
+    background: var(--gradient-coral);
+  }
+
+  .gradient-surface {
+    background: var(--gradient-surface);
+  }
+
+  .shadow-ocean {
+    box-shadow: var(--shadow-ocean);
+  }
+
+  .shadow-coral {
+    box-shadow: var(--shadow-coral);
+  }
+
+  .shadow-soft {
+    box-shadow: var(--shadow-soft);
+  }
+
+  .animate-wave {
+    animation: wave var(--wave-duration) ease-in-out infinite;
+  }
+
+  .animate-float {
+    animation: float var(--float-duration) ease-in-out infinite;
+  }
+
+  .animate-bubble {
+    animation: bubble-rise 8s linear infinite;
+  }
+
+  .animate-shimmer {
+    animation: shimmer 3s ease-in-out infinite;
+    background: linear-gradient(90deg, transparent, hsl(var(--accent) / 0.3), transparent);
+    background-size: 200% 100%;
+  }
+
+  /* Glass morphism for ocean depth effect */
+  .glass-ocean {
+    background: hsl(var(--background) / 0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid hsl(var(--border) / 0.2);
+  }
+
+  .glass-coral {
+    background: hsl(var(--secondary) / 0.1);
+    backdrop-filter: blur(10px);
+    border: 1px solid hsl(var(--secondary) / 0.2);
+  }
+}

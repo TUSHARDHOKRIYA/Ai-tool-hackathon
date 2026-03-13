@@ -1,0 +1,6 @@
+﻿
+*.pth
+*.crdownload
+*.pt
+node_modules/
+dist/
