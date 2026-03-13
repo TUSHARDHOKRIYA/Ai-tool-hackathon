@@ -27,8 +27,8 @@ app.add_middleware(
 )
 
 # ── Space URLs (set as HF Space Secrets / env vars) ────────────────
-SPACE1_URL = os.environ.get("SPACE1_URL", "https://YOUR-USER-coral-detection.hf.space")
-SPACE3_URL = os.environ.get("SPACE3_URL", "https://YOUR-USER-coral-classification.hf.space")
+SPACE1_URL = os.environ.get("SPACE1_URL", "https://degree-checker-01-coral-detection-api.hf.space")
+SPACE3_URL = os.environ.get("SPACE3_URL", "https://degree-checker-01-coral-classification-resnet.hf.space")
 
 # Detection thresholds
 DEFAULT_CONF = float(os.environ.get("DEFAULT_CONF", "0.25"))
