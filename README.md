@@ -57,3 +57,30 @@ The AI model scripts for coral health and ocean debris detection are written in 
    # For training the Ocean Debris model:
    python train_ocean_debris.py
    ```
+
+## Documentation & Code Structure
+
+- **Self-Documenting Code**: React components and Python scripts prioritize readable variable names and modular design.
+- **Component Level Comments**: Complex logic inside React components (e.g., hooks and data processing) are commented inline to clarify behavior.
+- **Python Model Comments**: Model initialization, image preprocessing, and prediction generation steps in `Yolo-model.py` and `resnet.py` include line-by-line comments detailing tensor transformations and thresholding logic. 
+
+## Attributions & Acknowledgments
+
+This project relies on several excellent third-party libraries, datasets, and APIs:
+
+### Frontend Libraries & Frameworks
+- **[React](https://reactjs.org/) & [Vite](https://vitejs.dev/)**: For the core UI framework and fast development server.
+- **[Tailwind CSS](https://tailwindcss.com/)**: For rapid, utility-first UI styling.
+- **[shadcn/ui](https://ui.shadcn.com/)**: For accessible, high-quality Radix UI components.
+- **[React Leaflet](https://react-leaflet.js.org/)**: For rendering interactive maps on the dashboard.
+- **[Recharts](https://recharts.org/)**: For charting coral health and debris data.
+
+### Backend Services & APIs
+- **[Supabase](https://supabase.com/)**: For PostgreSQL database hosting and real-time data syncing.
+- **[Cloudinary](https://cloudinary.com/)**: For robust cloud storage and delivery of uploaded marine images.
+- **[Hugging Face Spaces](https://huggingface.co/spaces)**: For hosting and serving inference endpoints for the YOLO/ResNet machine learning models.
+
+### AI Models & Datasets
+- **[Ultralytics (YOLOv8)](https://github.com/ultralytics/ultralytics)**: The core deep learning architecture used for detecting specific ocean debris objects in imagery.
+- **[PyTorch](https://pytorch.org/)**: The underlying tensor library and framework used for developing the ResNet model for coral bleaching classification.
+- **Marine Datasets**: The models were trained and evaluated on publicly available marine debris and coral reef imagery datasets (custom compiled specifically for this platform).
