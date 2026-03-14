@@ -7,7 +7,7 @@ const Header = () => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   const navItems = [
-    { name: "Home", href: "#home", type: "anchor" },
+    { name: "Home", href: "/", type: "link" },
     { name: "Coral Health Check", href: "/coral-health", type: "link" },
     { name: "Detect Debris", href: "/detect-debris", type: "link" },
     { name: "Reef Dashboard", href: "/dashboard", type: "link" },
@@ -18,13 +18,13 @@ const Header = () => {
       <nav className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           {/* Logo */}
-          <div className="flex items-center space-x-3">
+          <Link to="/" className="flex items-center space-x-3">
             <img
               src="/lovable-uploads/b0145202-4348-4c0d-b788-39ea583ccec6.png"
               alt="CoralWatch Logo"
-              className="h-12 w-auto"
+              className="h-16 w-16 rounded-full object-cover border-2 border-accent/20"
             />
-          </div>
+          </Link>
 
           {/* Desktop Navigation */}
           <div className="hidden md:flex items-center space-x-8">

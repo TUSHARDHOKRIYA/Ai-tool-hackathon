@@ -202,21 +202,8 @@ export default function CoralHealthDetector() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#e5f1f7] to-white/90 pt-16 pb-24 px-4 sm:px-6 lg:px-8 font-sans">
-      <div className="max-w-6xl mx-auto space-y-12">
-
-        {/* Hero Section */}
-        <div className="text-center space-y-6 max-w-3xl mx-auto">
-          <div className="mx-auto w-16 h-16 bg-teal-600 rounded-full flex items-center justify-center shadow-lg shadow-teal-600/20">
-            <Activity className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900">
-            Coral Health Check
-          </h1>
-          <p className="text-lg text-slate-600 leading-relaxed">
-            Upload an underwater image and our YOLOv11 model will detect and isolate every coral specimen in real time. Understanding coral health is crucial for reef conservation and early disease detection.
-          </p>
-        </div>
+    <div className="pb-12 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-6xl mx-auto space-y-8">
 
         {/* Main Content Grid */}
         <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">

@@ -2,7 +2,6 @@ import { useState, useCallback, useRef } from "react";
 import {
   Upload,
   X,
-  RefreshCw,
   AlertTriangle,
   CheckCircle2,
   Fish,
@@ -10,6 +9,7 @@ import {
   Clock,
   Save,
   Waves,
+  DownloadCloud,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,14 +21,15 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Slider } from "@/components/ui/slider";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { useMarineDebris } from "@/hooks/use-marine-debris";
+import { fetchHealth, fetchDetect } from "@/lib/marine-debris/api";
 import { saveDebrisEvent } from "@/lib/db";
 import { extractGPS } from "@/lib/exif";
 import { useToast } from "@/hooks/use-toast";
+import JSZip from "jszip";
+import { saveAs } from "file-saver";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -55,508 +56,290 @@ function pct(value: number): string {
   return `${(value * 100).toFixed(1)}%`;
 }
 
+// ── Upload Job types ─────────────────────────────────────────────────────────
+
+interface UploadJob {
+  id: string;
+  file: File;
+  step: 'queued' | 'gps' | 'detecting' | 'done' | 'error';
+  gps: { lat: number; lon: number } | null;
+  result?: any;
+  error?: string;
+}
+
+function stepLabel(step: UploadJob['step']): string {
+  const labels: Record<UploadJob['step'], string> = {
+    queued: 'Queued',
+    gps: 'Extracting GPS…',
+    detecting: 'Detecting debris…',
+    done: 'Done',
+    error: 'Error',
+  };
+  return labels[step];
+}
+
+function stepPct(step: UploadJob['step']): number {
+  const pcts: Record<UploadJob['step'], number> = {
+    queued: 5,
+    gps: 15,
+    detecting: 50,
+    done: 100,
+    error: 100,
+  };
+  return pcts[step];
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 const MarineDebrisDetector = () => {
-  // ── local state ──────────────────────────────────────────────────────────
-  const [conf, setConf] = useState(0.25);
-  const [iou, setIou] = useState(0.45);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [jobs, setJobs] = useState<UploadJob[]>([]);
+  const [running, setRunning] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [errorDismissed, setErrorDismissed] = useState(false);
-  const [debrisGps, setDebrisGps] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
-  const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const { toast } = useToast();
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // ── hook ─────────────────────────────────────────────────────────────────
-  const { detect, result, state, error, modelWarning, reset } =
-    useMarineDebris({ conf, iou });
-
-  const isProcessing =
-    state === "loading" || state === "uploading" || state === "cold-start";
-
-  // ── file selection ───────────────────────────────────────────────────────
-  const applyFile = useCallback((file: File) => {
-    if (!file.type.startsWith("image/")) return;
-    setSelectedFile(file);
-    setErrorDismissed(false);
-    setSaved(false);
-    const url = URL.createObjectURL(file);
-    setPreviewUrl(url);
-    // Auto-extract GPS
-    extractGPS(file).then((gps) => {
-      if (gps) {
-        setDebrisGps({ lat: gps.lat.toFixed(4), lon: gps.lon.toFixed(4) });
-      }
-    });
+  const updateJob = useCallback((id: string, patch: Partial<UploadJob>) => {
+    setJobs((prev) => prev.map((j) => (j.id === id ? { ...j, ...patch } : j)));
   }, []);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) applyFile(file);
+  const processFile = async (job: UploadJob) => {
+    try {
+      updateJob(job.id, { step: 'gps' });
+      const gps = await extractGPS(job.file);
+      updateJob(job.id, { gps });
+
+      updateJob(job.id, { step: 'detecting' });
+      const data = await fetchDetect(job.file, 0.25, 0.45);
+
+      updateJob(job.id, { step: 'done', result: data });
+    } catch (e: any) {
+      updateJob(job.id, { step: 'error', error: e.message ?? 'Unknown error' });
+    }
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
+  const addFiles = (files: File[]) => {
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    const newJobs: UploadJob[] = images.map((f) => ({
+      id: Math.random().toString(36).slice(2),
+      file: f,
+      step: 'queued',
+      gps: null,
+    }));
+    setJobs((prev) => [...prev, ...newJobs]);
   };
-
-  const handleDragLeave = () => setIsDragging(false);
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) applyFile(file);
+    addFiles(Array.from(e.dataTransfer.files));
   };
 
-  const handleReset = () => {
-    reset();
-    setSelectedFile(null);
-    setPreviewUrl(null);
-    setErrorDismissed(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  const handleRun = async () => {
+    setRunning(true);
+    const pending = jobs.filter((j) => j.step === 'queued' || j.step === 'error');
+    for (const job of pending) {
+      await processFile(job);
+    }
+    setRunning(false);
   };
 
-  const handleDetect = async () => {
-    if (!selectedFile) return;
-    setErrorDismissed(false);
-    await detect(selectedFile);
+  const handleClear = () => {
+    if (!running) setJobs([]);
   };
 
-  // ── derived ──────────────────────────────────────────────────────────────
-  const byClass = result?.summary.by_class ?? {};
-  const maxCount = Math.max(...Object.values(byClass), 1);
+  const done = jobs.filter((j) => j.step === 'done').length;
+  const errors = jobs.filter((j) => j.step === 'error').length;
 
-  // ─────────────────────────────────────────────────────────────────────────
+  const handleDownloadZip = async () => {
+    const zip = new JSZip();
+    const imgFolder = zip.folder('images');
+    if (!imgFolder) return;
+
+    jobs.forEach((job) => {
+      if (job.step === 'done' && job.result?.annotated_image) {
+        const b64Data = job.result.annotated_image.split(',')[1];
+        if (b64Data) {
+          imgFolder.file(`annotated_${job.file.name}`, b64Data, { base64: true });
+        }
+      }
+    });
+
+    const content = await zip.generateAsync({ type: 'blob' });
+    saveAs(content, 'debris_detection_results.zip');
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-gradient-to-b from-[#e5f1f7] to-white/90 pt-16 pb-24 px-4 sm:px-6 lg:px-8 font-sans">
-      <div className="max-w-6xl mx-auto space-y-12">
-
-        {/* Hero Section */}
-        <div className="text-center space-y-6 max-w-3xl mx-auto">
-          <div className="mx-auto w-16 h-16 bg-teal-600 rounded-full flex items-center justify-center shadow-lg shadow-teal-600/20">
-            <Waves className="w-8 h-8 text-white" />
-          </div>
-          <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900">
-            Detect Marine Debris
-          </h1>
-          <p className="text-lg text-slate-600 leading-relaxed">
-            Identify and track debris threatening coral reef ecosystems. Early detection helps prevent damage and enables timely cleanup efforts.
-          </p>
-        </div>
-
-        {/* ── Model warning ─────────────────────────────────────────────────── */}
-        {modelWarning && (
-          <Alert className="border-yellow-500/40 bg-yellow-500/10">
-            <AlertTriangle className="h-4 w-4 text-yellow-500" />
-            <AlertDescription className="text-yellow-700 dark:text-yellow-400">
-              {modelWarning}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* ── Error banner ──────────────────────────────────────────────────── */}
-        {state === "error" && error && !errorDismissed && (
-          <Alert className="border-red-500/40 bg-red-500/10">
-            <AlertTriangle className="h-4 w-4 text-red-500" />
-            <AlertDescription className="flex items-center justify-between gap-4">
-              <span className="text-red-700 dark:text-red-400">{error}</span>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-6 w-6 shrink-0"
-                onClick={() => setErrorDismissed(true)}
-                aria-label="Dismiss error"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </AlertDescription>
-          </Alert>
-        )}
+    <div className="pb-12 px-4 sm:px-6 lg:px-8 font-sans">
+      <div className="max-w-6xl mx-auto space-y-8">
 
         <div className="grid gap-8 lg:grid-cols-[1fr_1fr]">
-          {/* ── Left column: upload + controls ────────────────────────────── */}
+          {/* ── Left: upload + controls ── */}
           <div className="space-y-6">
-            {/* Upload zone */}
             <Card className="border shadow-sm bg-white/50 backdrop-blur-sm overflow-hidden">
               <CardHeader className="bg-white/50 border-b pb-4">
                 <CardTitle className="text-lg flex items-center gap-2 text-slate-800">
-                  <Upload className="h-5 w-5 text-teal-600" /> Upload Image
+                  <Upload className="h-5 w-5 text-teal-600" /> Upload Images or Folder
                 </CardTitle>
                 <CardDescription className="text-slate-500">
-                  Drag &amp; drop or click to select · JPG, PNG, WEBP
+                  Drag &amp; drop files/folders here, or use the buttons below. If images contain GPS data, coordinates will be auto-extracted.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="pt-6">
-                {/* Drop zone */}
+              <CardContent>
                 <div
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
+                  onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                  onDragLeave={() => setIsDragging(false)}
                   onDrop={handleDrop}
-                  onClick={() => !isProcessing && fileInputRef.current?.click()}
-                  className={`relative cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition-all duration-300 ${isDragging
-                    ? "border-primary bg-primary/5 scale-[1.02]"
-                    : "border-muted-foreground/25 hover:border-orange-500/60 hover:bg-orange-500/5"
-                    } ${isProcessing ? "pointer-events-none opacity-60" : ""}`}
+                  onClick={() => folderInputRef.current?.click()}
+                  className={`cursor-pointer rounded-xl border-2 border-dashed p-8 text-center transition-all ${isDragging
+                    ? 'border-primary bg-primary/5 scale-[1.01]'
+                    : 'border-muted-foreground/25 hover:border-orange-500/60 hover:bg-orange-500/5'
+                    }`}
                 >
-                  {previewUrl ? (
-                    <img
-                      src={previewUrl}
-                      alt="Selected preview"
-                      className="mx-auto max-h-64 rounded-lg object-contain shadow"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center gap-3 py-6">
-                      <Upload className="h-12 w-12 text-muted-foreground" />
-                      <div>
-                        <p className="font-semibold">Drop image here</p>
-                        <p className="text-sm text-muted-foreground">
-                          or click to browse
-                        </p>
-                      </div>
-                    </div>
-                  )}
+                  <Upload className="mx-auto h-10 w-10 mb-2 text-muted-foreground" />
+                  <p className="font-semibold">Drop images or folders here</p>
+                  <p className="text-sm text-muted-foreground">or click to browse</p>
                 </div>
+
+                {/* Hidden inputs */}
                 <input
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
+                  multiple
                   className="hidden"
-                  onChange={handleFileChange}
+                  onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
+                />
+                {/* Input for folder select */}
+                <input
+                  ref={folderInputRef}
+                  type="file"
+                  accept="image/*"
+                  // @ts-expect-error webkitdirectory is non-standard but widely supported
+                  webkitdirectory="true"
+                  directory=""
+                  multiple
+                  className="hidden"
+                  onChange={(e) => addFiles(Array.from(e.target.files ?? []))}
                 />
 
-                {/* File name */}
-                {selectedFile && (
-                  <p className="mt-2 truncate text-center text-xs text-muted-foreground">
-                    {selectedFile.name}
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Threshold controls */}
-            <Card className="border shadow-sm bg-white/50 backdrop-blur-sm overflow-hidden">
-              <CardHeader className="bg-white/50 border-b pb-4">
-                <CardTitle className="text-lg text-slate-800">Detection Thresholds</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-6 pt-6">
-                {/* Confidence */}
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium">Confidence</span>
-                    <Badge variant="secondary">{conf.toFixed(2)}</Badge>
-                  </div>
-                  <Slider
-                    min={0.1}
-                    max={0.9}
-                    step={0.05}
-                    value={[conf]}
-                    onValueChange={([v]) => setConf(v)}
-                    disabled={isProcessing}
-                    className="[&_[role=slider]]:bg-orange-500"
-                  />
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Permissive (0.1)</span>
-                    <span>Strict (0.9)</span>
-                  </div>
-                </div>
-
-                {/* IOU */}
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="font-medium">IOU (overlap)</span>
-                    <Badge variant="secondary">{iou.toFixed(2)}</Badge>
-                  </div>
-                  <Slider
-                    min={0.1}
-                    max={0.9}
-                    step={0.05}
-                    value={[iou]}
-                    onValueChange={([v]) => setIou(v)}
-                    disabled={isProcessing}
-                    className="[&_[role=slider]]:bg-orange-500"
-                  />
-                  <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Allow overlap (0.1)</span>
-                    <span>Strict NMS (0.9)</span>
-                  </div>
+                <div className="flex gap-2 mt-4 justify-center">
+                  <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()}>
+                    Select Files
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => folderInputRef.current?.click()}>
+                    Select Folder
+                  </Button>
                 </div>
               </CardContent>
             </Card>
 
-            {/* Action buttons */}
             <div className="flex gap-3">
-              <Button
-                className="flex-1 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-semibold"
-                disabled={!selectedFile || isProcessing}
-                onClick={handleDetect}
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {state === "cold-start"
-                      ? "Model waking up…"
-                      : "Detecting…"}
-                  </>
-                ) : (
-                  <>
-                    <Fish className="mr-2 h-4 w-4" />
-                    Detect Debris
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                disabled={isProcessing}
-                onClick={handleReset}
-              >
-                <RefreshCw className="h-4 w-4" />
-              </Button>
+              {jobs.filter((j) => j.step === 'queued' || j.step === 'error').length > 0 && (
+                <Button
+                  className="flex-1 bg-gradient-to-r from-orange-500 to-red-600 hover:from-orange-600 hover:to-red-700 text-white font-semibold"
+                  onClick={handleRun}
+                  disabled={running}
+                >
+                  {running ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Processing {jobs.filter(j => j.step === 'queued').length} items…</>
+                  ) : (
+                    <><Fish className="mr-2 h-4 w-4" /> Detect Debris ({jobs.filter((j) => j.step === 'queued').length})</>
+                  )}
+                </Button>
+              )}
+              {jobs.length > 0 && !running && (
+                <Button variant="outline" onClick={handleClear}>
+                  Clear List
+                </Button>
+              )}
             </div>
-
-            {/* Cold-start message */}
-            {state === "cold-start" && (
-              <Alert className="border-blue-500/40 bg-blue-500/10">
-                <Clock className="h-4 w-4 text-blue-500" />
-                <AlertDescription className="text-blue-700 dark:text-blue-400">
-                  Model is waking up — this may take 30–60 s on first use. Please
-                  wait…
-                </AlertDescription>
-              </Alert>
-            )}
           </div>
 
-          {/* ── Right column: results ──────────────────────────────────────── */}
+          {/* ── Right: results/job list ── */}
           <div className="space-y-4">
-            {state === "success" && result ? (
-              <>
-                {/* Annotated image */}
-                <Card className="border-2 border-green-500/30">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="flex items-center gap-2 text-base">
-                      <CheckCircle2 className="h-4 w-4 text-green-500" />
-                      Detection Result
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <img
-                      src={result.annotated_image}
-                      alt="Annotated detection result"
-                      className="mx-auto max-h-72 w-full rounded-lg object-contain shadow-md"
-                    />
-                  </CardContent>
-                </Card>
-
-                {/* Summary card */}
-                <Card className="border-2">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-base">Summary</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    {/* Stats row */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="rounded-lg bg-orange-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-orange-500">
-                          {result.summary.total_debris}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Total Debris
-                        </p>
-                      </div>
-                      <div className="rounded-lg bg-blue-500/10 p-3 text-center">
-                        <p className="text-2xl font-bold text-blue-500">
-                          {pct(result.summary.avg_confidence)}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          Avg Confidence
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* By-class breakdown */}
-                    {Object.keys(byClass).length > 0 && (
-                      <div className="space-y-2">
-                        <p className="text-sm font-medium">By Class</p>
-                        {Object.entries(byClass).map(([cls, count]) => (
-                          <div key={cls} className="space-y-1">
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="flex items-center gap-1.5">
-                                <span
-                                  className={`inline-block h-2 w-2 rounded-full ${classColor(cls)}`}
-                                />
-                                {formatLabel(cls)}
-                              </span>
-                              <Badge
-                                variant="secondary"
-                                className="h-4 px-1.5 text-xs"
-                              >
-                                {count}
-                              </Badge>
-                            </div>
-                            <Progress
-                              value={(count / maxCount) * 100}
-                              className="h-1.5"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {/* Pill badges */}
-                    {Object.keys(byClass).length > 0 && (
-                      <div className="flex flex-wrap gap-2 pt-1">
-                        {Object.entries(byClass).map(([cls]) => (
-                          <Badge
-                            key={cls}
-                            className={`${classColor(cls)} text-white text-xs`}
-                          >
-                            {formatLabel(cls)}
-                          </Badge>
-                        ))}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-
-                {/* Save to Database */}
-                <Card className="border-2 border-blue-500/30">
-                  <CardContent className="p-4 space-y-3">
-                    <p className="text-sm font-semibold flex items-center gap-1.5">
-                      <Save className="h-4 w-4 text-blue-500" /> Save Detection to Database
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <Input
-                        placeholder="Latitude"
-                        type="number"
-                        step="0.0001"
-                        value={debrisGps.lat}
-                        onChange={(e) => setDebrisGps(prev => ({ ...prev, lat: e.target.value }))}
-                        className="h-8 text-xs"
-                      />
-                      <Input
-                        placeholder="Longitude"
-                        type="number"
-                        step="0.0001"
-                        value={debrisGps.lon}
-                        onChange={(e) => setDebrisGps(prev => ({ ...prev, lon: e.target.value }))}
-                        className="h-8 text-xs"
-                      />
-                    </div>
+            <Card className="border-2 h-full min-h-[400px]">
+              <CardHeader className="pb-3 border-b">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-base">Analysis Progress</CardTitle>
+                    <CardDescription>
+                      Files loaded: {jobs.length} | Done: {done}
+                    </CardDescription>
+                  </div>
+                  {!running && done > 0 && (
                     <Button
-                      className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs h-8"
-                      disabled={saving || saved || !debrisGps.lat || !debrisGps.lon}
-                      onClick={async () => {
-                        setSaving(true);
-                        const ok = await saveDebrisEvent({
-                          lat: parseFloat(debrisGps.lat),
-                          lon: parseFloat(debrisGps.lon),
-                          total_debris: result.summary.total_debris,
-                          by_class: result.summary.by_class,
-                          avg_confidence: result.summary.avg_confidence,
-                          image_url: result.annotated_image,
-                        });
-                        setSaving(false);
-                        if (ok) {
-                          setSaved(true);
-                          toast({ title: 'Saved!', description: 'Debris event stored in database.' });
-                        } else {
-                          toast({ title: 'Error', description: 'Failed to save — check Supabase config & debris_events table.', variant: 'destructive' });
-                        }
-                      }}
+                      size="sm"
+                      className="bg-blue-600 hover:bg-blue-700 text-white font-semibold"
+                      onClick={handleDownloadZip}
                     >
-                      {saved ? <><CheckCircle2 className="mr-1 h-3 w-3" /> Saved</>
-                        : saving ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Saving...</>
-                          : <><Save className="mr-1 h-3 w-3" /> Save to Database</>}
+                      <DownloadCloud className="w-4 h-4 mr-2" />
+                      Download ZIP
                     </Button>
-                  </CardContent>
-                </Card>
-
-                {/* Detections list */}
-                {result.detections.length > 0 && (
-                  <Card className="border-2">
-                    <CardHeader className="pb-2">
-                      <CardTitle className="text-base">
-                        Detections ({result.detections.length})
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-0">
-                      <ScrollArea className="h-56 px-4">
-                        <div className="space-y-2 py-3">
-                          {result.detections.map((d) => (
-                            <div
-                              key={d.id}
-                              className="flex items-start justify-between rounded-lg border bg-muted/30 px-3 py-2 text-xs"
-                            >
-                              <div className="space-y-0.5">
-                                <div className="flex items-center gap-1.5">
-                                  <span
-                                    className={`inline-block h-2 w-2 shrink-0 rounded-full ${classColor(d.class_name)}`}
-                                  />
-                                  <span className="font-semibold">
-                                    {formatLabel(d.class_name)}
-                                  </span>
-                                </div>
-                                <p className="text-muted-foreground">
-                                  bbox: ({Math.round(d.bbox.x1)},{" "}
-                                  {Math.round(d.bbox.y1)}) → (
-                                  {Math.round(d.bbox.x2)},{" "}
-                                  {Math.round(d.bbox.y2)})
-                                </p>
-                              </div>
-                              <Badge
-                                variant="outline"
-                                className="ml-2 shrink-0 font-mono"
-                              >
-                                {pct(d.confidence)}
-                              </Badge>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                {jobs.length > 0 ? (
+                  <div className="divide-y max-h-[500px] overflow-y-auto">
+                    {jobs.map((job) => (
+                      <div key={job.id} className="p-4 flex flex-col gap-2 hover:bg-muted/30">
+                        <div className="flex items-start justify-between">
+                          <div className="flex-1 min-w-0 pr-4">
+                            <p className="text-sm font-medium truncate" title={job.file.webkitRelativePath || job.file.name}>
+                              {job.file.webkitRelativePath || job.file.name}
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              {job.gps ? (
+                                <Badge variant="outline" className="text-[10px] text-emerald-600 border-emerald-200 bg-emerald-50">GPS Found</Badge>
+                              ) : job.step === 'done' || job.step === 'detecting' ? (
+                                <Badge variant="outline" className="text-[10px] text-amber-600 border-amber-200 bg-amber-50">No GPS</Badge>
+                              ) : null}
+                              <span className="text-[11px] text-muted-foreground">
+                                {job.step === 'error' ? `❌ ${job.error}` : stepLabel(job.step)}
+                              </span>
                             </div>
-                          ))}
-                        </div>
-                      </ScrollArea>
-                    </CardContent>
-                  </Card>
-                )}
+                          </div>
 
-                {/* No debris found */}
-                {result.detections.length === 0 && (
-                  <Alert className="border-green-500/40 bg-green-500/10">
-                    <CheckCircle2 className="h-4 w-4 text-green-500" />
-                    <AlertDescription className="text-green-700 dark:text-green-400">
-                      No debris detected in this image at the current thresholds.
-                      Try lowering the confidence threshold.
-                    </AlertDescription>
-                  </Alert>
-                )}
-              </>
-            ) : (
-              /* Placeholder when no results */
-              <div className="flex h-full min-h-[300px] flex-col items-center justify-center rounded-xl border-2 border-dashed border-muted-foreground/20 text-muted-foreground">
-                {isProcessing ? (
-                  <div className="flex flex-col items-center gap-3">
-                    <Loader2 className="h-10 w-10 animate-spin text-orange-500" />
-                    <p className="text-sm font-medium">
-                      {state === "cold-start"
-                        ? "Model waking up, please wait…"
-                        : "Analyzing image…"}
-                    </p>
+                          <div className="flex gap-2 items-center">
+                            {job.step === 'done' && job.result && (
+                              <Badge className="bg-orange-500 text-white text-xs">
+                                {job.result.summary?.total_debris ?? 0} debris
+                              </Badge>
+                            )}
+                            {(job.step === 'detecting' || job.step === 'gps') && (
+                              <Loader2 className="h-4 w-4 animate-spin text-orange-500 shrink-0" />
+                            )}
+                            {job.step === 'done' && <CheckCircle2 className="h-5 w-5 text-emerald-500 shrink-0" />}
+                            <button
+                              className="text-muted-foreground hover:text-red-500 transition-colors ml-1"
+                              onClick={() => setJobs((prev) => prev.filter((j) => j.id !== job.id))}
+                              title="Remove from list"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </div>
+                        <Progress
+                          value={stepPct(job.step)}
+                          className={`h-1.5 ${job.step === 'error' ? '[&>div]:bg-red-500' : '[&>div]:bg-orange-500'}`}
+                        />
+                      </div>
+                    ))}
                   </div>
                 ) : (
-                  <div className="flex flex-col items-center gap-3 p-8 text-center">
-                    <Fish className="h-12 w-12 opacity-30" />
-                    <p className="text-sm">
-                      Upload an image and click{" "}
-                      <strong>Detect Debris</strong> to see results here.
+                  <div className="flex flex-col items-center justify-center h-80 text-muted-foreground p-8 text-center bg-white/20">
+                    <Fish className="h-12 w-12 opacity-20 mb-4 text-orange-500" />
+                    <p className="text-sm font-medium text-slate-500">
+                      Upload single or bulk images to detect marine debris.
                     </p>
                   </div>
                 )}
-              </div>
-            )}
+              </CardContent>
+            </Card>
           </div>
         </div>
       </div>
